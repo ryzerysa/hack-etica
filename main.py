@@ -382,7 +382,19 @@ class AuditArcadeUI:
         self.run_bash("(ss -tuln 2>/dev/null || netstat -tuln 2>/dev/null || true); echo '---'; (curl -I -L --max-time 10 https://example.com 2>/dev/null | head -20 || true)")
 
     def run_usb_audit(self) -> None:
-        self.run_bash("chmod +x ~/conectar-pc.sh && ~/conectar-pc.sh ; (command -v lsusb >/dev/null 2>&1 && lsusb || true); echo '---'; (dmesg 2>/dev/null | tail -20 || true)")
+        self.run_bash(
+            '''
+            sleep 3
+            for ip in 192.168.42.1 192.168.42.129 192.168.137.1 192.168.137.1; do
+                if ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
+                    echo "PC encontrado em $ip"
+                    ssh usuario@$ip
+                    exit
+                fi
+            done
+            echo "Não encontrei o PC. Verifique se o tethering está ativo."
+            '''
+        )
 
     def run_local_export(self) -> None:
         os.makedirs("exports", exist_ok=True)
@@ -634,42 +646,3 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-echo "Procurando o PC na rede USB..."
-
-# Espera o tethering ativar
-sleep 4
-
-# Lista de IPs comuns de tethering USB
-IPS=(
-    "192.168.42.1"
-    "192.168.42.129"
-    "192.168.137.1"
-    "192.168.137.129"
-    "192.168.43.1"
-)
-
-USUARIO="seu_usuario"   # <--- TROQUE AQUI pelo usuário do seu PC
-
-encontrado=false
-
-for ip in "${IPS[@]}"; do
-    echo -n "Testando $ip ... "
-    if ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
-        echo "encontrado!"
-        echo "Conectando em $ip ..."
-        ssh "$USUARIO@$ip"
-        encontrado=true
-        break
-    else
-        echo "não respondeu"
-    fi
-done
-
-if [ "$encontrado" = false ]; then
-    echo ""
-    echo "Não encontrei o PC."
-    echo "Verifique se:"
-    echo "  1. O cabo USB está conectado"
-    echo "  2. O Tethering USB está ativado no celular"
-    echo "  3. O SSH está rodando no PC"
-fi
