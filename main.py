@@ -9,8 +9,16 @@ rede local, NFC e exportação local autorizada.
 
 import os
 import subprocess
+import sys
 import textwrap
 from datetime import datetime
+
+try:
+    import termios
+    import tty
+except ImportError:
+    termios = None
+    tty = None
 
 from pyfiglet import Figlet
 from rich.console import Console
@@ -25,12 +33,14 @@ class AuditArcadeUI:
         self.running = True
         self.screen = "menu"
         self.selected = 0
-        self.menu_items = ["Wi-Fi", "Bluetooth", "Phishing", "MITM", "DoS", "USB", "Relatório", "Sobre"]
+        self.menu_items = ["Wi-Fi", "Bluetooth", "Ferramentas", "Relatório", "Sobre"]
         # submenus
         self.wifi_items = ["Scan APs", "Clients", "WPS check", "Channel usage"]
         self.bt_items = ["Bluejacking", "Bluesnarfing", "BLE Spoofing", "Scan Devices"]
+        self.ferramentas_items = ["Phishing", "MITM", "DoS", "USB"]
         self.wifi_selected = 0
         self.bt_selected = 0
+        self.ferramentas_selected = 0
         self.last_status = "Pronto"
         self.last_output = "Selecione um módulo para iniciar uma análise autorizada."
         self.last_command = ""
@@ -41,13 +51,145 @@ class AuditArcadeUI:
         # ASCII-art icons based on provided image bases (pixel-like blocks)
         self.icons = {
             "Wi-Fi": (
-                "        █████████        \n"
-                "     ███         ███     \n"
-                "   ███             ███   \n"
-                "      █████   █████      \n"
-                "         ███████         \n"
-                "           ███           \n"
-                "            █            \n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%%%%@%%%%%%%%%%%%%@%%%%%@%%@%@%%%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@....*..........:::=....:..::::..-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@....*.........:...-....::.......-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@..:....:........+.....:.......-...::......:.=:.......*..=@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@...:............*.............=....:........=........+..+@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@:...:.::-==--==--++++%+++++++++++++#++++*++++++++*----:--=*::+.:::@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@....-:...........@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#......:.+..=....@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@#....+--:=..:...::....@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*........+..=----..::.@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@#....-....@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:.::..:...@@@@@@@@@@@\n"
+                "@@@@@@@@... ::.:.=....@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@-........-...:@@@@@@@\n"
+                "@@@@@@@@....:...:+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:..:*:.:.@@@@@@@\n"
+                "@@@@@@@@....::..:+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...:+....@@@@@@@\n"
+                "@@@@@@@@.....@@@@@@@@@@@@@@@@@@@@@@@@@@.:::=:..:::::=.:..::::*@@@@@@@@@@@@@@@@@@@@@@@@@:....@@@@@@@\n"
+                "@@@@@@@@.....@@@@@@@@@@@@@@@@@@@@@@@@@@....=...::...-...:::..+@@@@@@@@@@@@@@@@@@@@@@@@@:...:@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@-...:+........-:.......-.....:..=....-:...@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@=....+........-......:.=........=:...-....@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@....=....*....@@@@@@@@@@@@@@@@@@@@@@+....-...-:...*@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@ ..:+....*..:.@@@@@@@@@@@@@@@@@@@@@@+:...-...-::..+@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@:....----+....*....@@@@@@@@@@@@@@@@@@@@@@=....-:..:-----....%@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@:.........@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%....-....%@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@:..::...:.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#...::....%@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@:....@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@....:%@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@:....@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.....%@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+            ),
+            "Bluetooth": (
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=:::=.:.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.:.=...=..:@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=...=.:..::.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=...=.......@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@::.=...=...:.......@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=...=........:..@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@-==#=--+%%%-=---==-====*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=...+@@@...........:+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@--=*=--*@@@@@@@...:+===*+++*@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.:.=...+@@@@@@@....:...=...:@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=..:+@@@@@@@@@@@...:+---=++++@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.....@@@@@@@@@@@@@...=...+@@@@@@@@@@@:...-...=....@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.....@@@@@@@@@@@@@...=...+@@@@@@@@@@@@@@@*...=....@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.....@@@@@@@@@@@@@...=:..+@@@@@@@@@@@@@@@#.:.=:...@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...:.@@@@@@@@.:.=...+@@@@@@@@@@@.:.:=...-....@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.....@@@@@@@@...=...+@@@@@@@@@@@....=..:.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@-----::::=@@@...=::.+@@@@@@%:.:.:---=::--@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@+..:..=@@@..:=::.+@@@@@@%.....:..:@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%**+..-::....=...+@@@......:.###*#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#..-...::.=...=.:...:..::.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@......=...=...:...@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...:::=...=.....::@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=...=::.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@..:=:..=.::@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:::=..:=:::...:@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@::..:.=.::=:......@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%:.:.:::::+:::+:::::::....@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:::::.:.:=...+.........:.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*..===*:--===#===*@@@....-==-....-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*..=..-@@@...=:::+@@@@@@@.......::@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@..::..:::=@@@...=:::+@@@@@@@.:......=:..:@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.....@@@@@@@@..:=...+@@@@@@@@@@@.::.=...:@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:....@@@@@@@@.::=...+@@@@@@@@@@@.:..=...=....@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@.....@@@@@@@@@@@@@..:+...+@@@@@@@@@@@@@@@*...-....@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@.....@@@@@@@@@@@@@...=..:+@@@@@@@@@@@@@@@#...-...:@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@..:=..:+@@@@@@@@@@@....=...=....@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@..:+:.:+@@@@@@@@@@@....=...-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@-=+#==-*@@@@@@%::::====+.:..@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...+.::+@@@@@@@........-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=.::+@@@.:...::.....-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=..:*%%%........@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@
+                @@@@@@@@@@@@@@@@@...=...=...........@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...+...=...:::.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=...=.:.....@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:..=...=...%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=::.=...@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%@%@%@@@@@%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+            ),
+            "Ferramentas": (
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@+=====+=+==+==+===@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...::.........:..:@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@=..:...:..........:......@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@+...::...:...:::..:....::@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:..:.::.@@@@@@@@@@@@@@@@...:.:.%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@===-::-:...@@@@@@@@@@@@@@@@:...:::+===@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@..:-...@@@@@@@@@@@@@@@@@@@@@@@@..:-...@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@-::=:-:@@@@@@@@@@@@@@@@@@@@@@@@:--=::-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@..:-...@@@@@@@@@@@@@@@@@@@@@@@@...-...@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@..:-...@@@@@@@@@@@@@@@@@@@@@@@@.::-...@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...-..:@@@@@@@@@@@@@@@@@@@@@@@@...-..:@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...-...@@@@@@@@@@@@@@@@@@@@@@@@..:=::.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:::-:..@@@@@@@@@@@@@@@@@@@@@@@@:.:-...@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...-::.@@@@@@@@@@@@@@@@@@@@@@@@...-...@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%:..-...-...:...-...........-:..:...::..-:::...:.@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...-...-...::..:...........:....::.:...-......::@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#...:...-...-...:...:......:....:...........-......:....:@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%...:...-...-...-.......:...........-.......:...-............@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%::.:...-::.-:..:..::.:::%@@@@@@@:::.::.::::-....:::...:.@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#...:...-...-...:........@@@@@@@@...........-............@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%.......-...-........*@@@@@@@@@@@@@@:.......-..........:.@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%...:...-...-...:....*@@@@@@@@@@@@@@....::..-............@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%=++++++*+++*===+++=-#@@@@@@@@@@@@@@-=====++*++++=++=+++-@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%...:...-...-...:....*@@@@@@@@@@@@@@....:...-:.........:.@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%...:...-...-.........::.@@@@@@@@:::........-............@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%.:.:...-...-...::.......@@@@@@@%.......:...-............@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%.......-...-...:........@@@@@@@%.......:...-............@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%...:...-...-...:........@@@@@@@%...........-......:.....@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%-------+---+---=-----%%%@@@@@@@@@@#--------+-------:---:@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%...::..-...-...:...:.@@@@@@@@@@@@@#....:...-............@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%:::-:::=:::=:::::::-:......::..-:.::.::::::=::::::::::-:@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%...:...-...-...:...:.......:...-.......::..-..........:.@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*##%*++#*++#+++*+++****+*+++****+**+++++*++#******+=**#*@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...-:..-...:...-:..........:...........=......::@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%:::=:::-:::-:::-:::::::::::-::.::::::::-::::::::@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
             ),
             "Phishing": (
                 "  ██████   \n"
@@ -100,8 +242,36 @@ class AuditArcadeUI:
     def run(self) -> None:
         while self.running:
             self.draw()
-            key = input("Escolha: ").strip().lower()
+            key = self.read_key()
             self.handle_key(key)
+
+    def read_key(self) -> str:
+        if os.name == "nt" or termios is None or tty is None:
+            return input("Escolha: ").strip().lower()
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                seq = sys.stdin.read(2)
+                if seq == "[A":
+                    return "up"
+                if seq == "[B":
+                    return "down"
+                if seq == "[C":
+                    return "right"
+                if seq == "[D":
+                    return "left"
+                return ""
+            if ch in {"\r", "\n"}:
+                return "enter"
+            if ch == "\x03":
+                raise KeyboardInterrupt
+            return ch.lower()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     def handle_key(self, key: str) -> None:
         if key in {"q", "quit", "sair"}:
@@ -109,16 +279,16 @@ class AuditArcadeUI:
             return
 
         if self.screen == "menu":
-            if key in {"a", "left", "esquerda"}:
+            if key in {"a", "left", "esquerda", "w", "up"}:
                 self.selected = (self.selected - 1) % len(self.menu_items)
-            elif key in {"d", "right", "direita"}:
+            elif key in {"d", "right", "direita", "s", "down"}:
                 self.selected = (self.selected + 1) % len(self.menu_items)
             elif key in {"enter", "e", "selecionar", ""}:
                 self.enter_menu_option()
         elif self.screen == "wifi_menu":
-            if key in {"a", "left", "esquerda"}:
+            if key in {"a", "left", "esquerda", "w", "up"}:
                 self.wifi_selected = (self.wifi_selected - 1) % len(self.wifi_items)
-            elif key in {"d", "right", "direita"}:
+            elif key in {"d", "right", "direita", "s", "down"}:
                 self.wifi_selected = (self.wifi_selected + 1) % len(self.wifi_items)
             elif key in {"enter", "e", "selecionar", ""}:
                 self.run_wifi_tool(self.wifi_items[self.wifi_selected])
@@ -126,12 +296,22 @@ class AuditArcadeUI:
             elif key in {"b", "back", "esc"}:
                 self.screen = "menu"
         elif self.screen == "bluetooth_menu":
-            if key in {"a", "left", "esquerda"}:
+            if key in {"a", "left", "esquerda", "w", "up"}:
                 self.bt_selected = (self.bt_selected - 1) % len(self.bt_items)
-            elif key in {"d", "right", "direita"}:
+            elif key in {"d", "right", "direita", "s", "down"}:
                 self.bt_selected = (self.bt_selected + 1) % len(self.bt_items)
             elif key in {"enter", "e", "selecionar", ""}:
                 self.run_bluetooth_tool(self.bt_items[self.bt_selected])
+                self.screen = "report"
+            elif key in {"b", "back", "esc"}:
+                self.screen = "menu"
+        elif self.screen == "ferramentas_menu":
+            if key in {"a", "left", "esquerda", "w", "up"}:
+                self.ferramentas_selected = (self.ferramentas_selected - 1) % len(self.ferramentas_items)
+            elif key in {"d", "right", "direita", "s", "down"}:
+                self.ferramentas_selected = (self.ferramentas_selected + 1) % len(self.ferramentas_items)
+            elif key in {"enter", "e", "selecionar", ""}:
+                self.run_ferramentas_tool(self.ferramentas_items[self.ferramentas_selected])
                 self.screen = "report"
             elif key in {"b", "back", "esc"}:
                 self.screen = "menu"
@@ -151,14 +331,10 @@ class AuditArcadeUI:
             self.bt_selected = 0
             self.screen = "bluetooth_menu"
             return
-        elif option == "Phishing":
-            self.run_phishing_awareness()
-        elif option == "MITM":
-            self.run_mitm_check()
-        elif option == "DoS":
-            self.run_dos_guard()
-        elif option == "USB":
-            self.run_usb_audit()
+        if option == "Ferramentas":
+            self.ferramentas_selected = 0
+            self.screen = "ferramentas_menu"
+            return
         elif option == "Relatório":
             self.run_local_export()
         elif option == "Sobre":
@@ -203,46 +379,61 @@ class AuditArcadeUI:
         self.screen = "report"
 
     def run_wifi_tool(self, name: str) -> None:
-        # Defensive and diagnostic implementations only
         self.last_command = f"Wi-Fi tool: {name}"
         if name == "Scan APs":
-            self.run_bash("(command -v nmcli >/dev/null 2>&1 && nmcli device wifi list || iwlist scanning 2>/dev/null || true)")
+            self.run_bash(
+                "(command -v nmcli >/dev/null 2>&1 && nmcli device wifi list || command -v iwlist >/dev/null 2>&1 && iwlist scan 2>/dev/null || true)"
+            )
         elif name == "Clients":
             self.run_bash("(arp -a 2>/dev/null || ip neigh 2>/dev/null || true)")
         elif name == "WPS check":
-            self.last_output = "WPS check: use 'wpscan' or 'reaver' in an authorized lab. This UI only reports whether WPS appears enabled."
-            self.last_status = "INFO"
+            self.run_bash(
+                "(command -v wash >/dev/null 2>&1 && wash --scan 2>/dev/null | head -20 || echo 'WPS scan não disponível. Instale wash ou use reaver em laboratório autorizado.')"
+            )
         elif name == "Channel usage":
-            self.run_bash("(command -v iw >/dev/null 2>&1 && iw dev wlan0 scan dump 2>/dev/null | grep frequency || true)")
+            self.run_bash(
+                "(command -v iw >/dev/null 2>&1 && iw dev wlan0 scan dump 2>/dev/null | grep -E 'frequency|channel' || command -v iwlist >/dev/null 2>&1 && iwlist wlan0 channel 2>/dev/null | grep -E 'Channel|Frequency' || true)"
+            )
         self.screen = "report"
 
     def run_bluetooth_tool(self, name: str) -> None:
-        # Defensive descriptions / scans only
         self.last_command = f"Bluetooth tool: {name}"
         if name == "Bluejacking":
-            self.last_output = (
-                "Bluejacking (awareness):\n"
-                "- Técnica de envio de mensagens a aparelhos discoverable.\n"
-                "- Não implementado: forneça checklist de autorização e monitoramento.\n"
-                "- Comando útil: 'bluetoothctl devices' para listar dispositivos."
+            self.run_bash(
+                "(command -v bluetoothctl >/dev/null 2>&1 && bluetoothctl --timeout 5 scan on >/dev/null 2>&1 && bluetoothctl devices || echo 'bluetoothctl não disponível.')"
             )
             self.last_status = "INFO"
         elif name == "Bluesnarfing":
-            self.last_output = (
-                "Bluesnarfing (awareness):\n"
-                "- Acesso não autorizado a dados OBEX. Não implementado.\n"
-                "- Detecte aparelhos com serviços expostos usando: 'sdptool browse <MAC>' (autorizado apenas em laboratório)."
+            self.run_bash(
+                "(command -v sdptool >/dev/null 2>&1 && sdptool browse || echo 'sdptool não disponível para descobrir serviços Bluetooth.')"
             )
             self.last_status = "INFO"
         elif name == "BLE Spoofing":
-            self.last_output = (
-                "BLE Spoofing (awareness):\n"
-                "- Spoofing altera anúncios BLE. Não implementado.\n"
-                "- Para diagnóstico, use 'hcitool lescan' e 'btmgmt' to inspect advertisements."
+            self.run_bash(
+                "(command -v hcitool >/dev/null 2>&1 && timeout 5 hcitool lescan 2>/dev/null || echo 'hcitool não disponível.')"
             )
             self.last_status = "INFO"
         elif name == "Scan Devices":
-            self.run_bash("(command -v bluetoothctl >/dev/null 2>&1 && bluetoothctl --timeout 5 scan on && bluetoothctl devices || true)")
+            self.run_bash(
+                "(command -v bluetoothctl >/dev/null 2>&1 && bluetoothctl --timeout 5 scan on >/dev/null 2>&1 && bluetoothctl devices || command -v hcitool >/dev/null 2>&1 && timeout 5 hcitool scan 2>/dev/null || echo 'Nenhuma ferramenta Bluetooth disponível.')"
+            )
+            self.last_status = "OK"
+        self.screen = "report"
+
+    def run_ferramentas_tool(self, name: str) -> None:
+        self.last_command = f"Ferramentas tool: {name}"
+        if name == "Phishing":
+            self.run_phishing_awareness()
+            return
+        elif name == "MITM":
+            self.run_mitm_check()
+            return
+        elif name == "DoS":
+            self.run_dos_guard()
+            return
+        elif name == "USB":
+            self.run_usb_audit()
+            return
         self.screen = "report"
 
     def run_bash(self, command: str) -> None:
@@ -292,7 +483,7 @@ class AuditArcadeUI:
             style = "bold black on yellow" if idx == self.selected else "white"
             table.add_row(f"> {item}" if idx == self.selected else f"  {item}", style=style)
         self.console.print(table)
-        self.console.print(Panel("[yellow]Esquerda/Direita[/yellow] para navegar\n[yellow]Enter[/yellow] para selecionar\n[yellow]Q[/yellow] para sair", border_style="yellow"))
+        self.console.print(Panel("[yellow]Setas / A/D / W/S[/yellow] para navegar\n[yellow]Enter[/yellow] para selecionar\n[yellow]Q[/yellow] para sair", border_style="yellow"))
 
     def draw_wifi_menu(self) -> None:
         selected = self.wifi_items[self.wifi_selected]
@@ -304,7 +495,7 @@ class AuditArcadeUI:
             style = "bold black on yellow" if idx == self.wifi_selected else "white"
             table.add_row(f"> {item}" if idx == self.wifi_selected else f"  {item}", style=style)
         self.console.print(table)
-        self.console.print(Panel("[yellow]Esquerda/Direita[/yellow] para navegar\n[yellow]Enter[/yellow] executar\n[yellow]B[/yellow] voltar", border_style="yellow"))
+        self.console.print(Panel("[yellow]Setas / A/D / W/S[/yellow] para navegar\n[yellow]Enter[/yellow] executar\n[yellow]B[/yellow] voltar", border_style="yellow"))
 
     def draw_bluetooth_menu(self) -> None:
         selected = self.bt_items[self.bt_selected]
@@ -316,7 +507,19 @@ class AuditArcadeUI:
             style = "bold black on yellow" if idx == self.bt_selected else "white"
             table.add_row(f"> {item}" if idx == self.bt_selected else f"  {item}", style=style)
         self.console.print(table)
-        self.console.print(Panel("[yellow]Esquerda/Direita[/yellow] para navegar\n[yellow]Enter[/yellow] executar\n[yellow]B[/yellow] voltar", border_style="yellow"))
+        self.console.print(Panel("[yellow]Setas / A/D / W/S[/yellow] para navegar\n[yellow]Enter[/yellow] executar\n[yellow]B[/yellow] voltar", border_style="yellow"))
+
+    def draw_ferramentas_menu(self) -> None:
+        selected = self.ferramentas_items[self.ferramentas_selected]
+        title = Text(self.font.renderText(selected), style="bold yellow")
+        self.console.print(Panel(title, border_style="yellow", box=box.SQUARE))
+        table = Table(title="Ferramentas", box=box.SIMPLE, show_header=False)
+        table.add_column("Opção", style="bold yellow")
+        for idx, item in enumerate(self.ferramentas_items):
+            style = "bold black on yellow" if idx == self.ferramentas_selected else "white"
+            table.add_row(f"> {item}" if idx == self.ferramentas_selected else f"  {item}", style=style)
+        self.console.print(table)
+        self.console.print(Panel("[yellow]Setas / A/D / W/S[/yellow] para navegar\n[yellow]Enter[/yellow] executar\n[yellow]B[/yellow] voltar", border_style="yellow"))
 
     def draw_report(self) -> None:
         panel = Panel.fit(
