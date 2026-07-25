@@ -56,6 +56,11 @@ class AuditArcadeUI:
         self.wifi_selected = 0
         self.wifi_networks = []
         self.wifi_network_selected = 0
+        self.wifi_pending_ssid = ""
+        self.wifi_pending_password = ""
+        self.wifi_pending_target = ""
+        self.wifi_pending_username = ""
+        self.wifi_pending_code = ""
         self.bt_selected = 0
         self.ferramentas_selected = 0
         self.last_status = "Pronto"
@@ -395,6 +400,13 @@ class AuditArcadeUI:
                 self.select_wifi_network()
             elif key in {"b", "back", "esc"}:
                 self.screen = "wifi_menu"
+        elif self.screen == "wifi_password_prompt":
+            if key in {"b", "back", "esc"}:
+                self.screen = "wifi_network_menu"
+                return
+            if key in {"enter", "e", "selecionar", ""}:
+                self.finish_wifi_selection()
+                return
         elif self.screen == "bluetooth_menu":
             if key in {"a", "left", "esquerda", "w", "up"}:
                 self.bt_selected = (self.bt_selected - 1) % len(self.bt_items)
@@ -1008,12 +1020,14 @@ class AuditArcadeUI:
         try:
             networks = self.get_available_wifi_networks()
             if not networks:
-                self.last_status = "ERRO"
-                self.last_output = "Nenhuma rede Wi-Fi disponível para listar no momento."
-                self.screen = "report"
+                self.last_status = "INFO"
+                self.last_output = "Nenhuma rede Wi-Fi detectada no momento. Você pode inserir o SSID manualmente."
+                self.wifi_networks = [{"ssid": "Inserir rede manualmente", "security": "manual"}]
+                self.wifi_network_selected = 0
+                self.screen = "wifi_network_menu"
                 return
 
-            self.wifi_networks = networks
+            self.wifi_networks = networks + [{"ssid": "Inserir rede manualmente", "security": "manual"}]
             self.wifi_network_selected = 0
             self.screen = "wifi_network_menu"
         except KeyboardInterrupt:
@@ -1027,21 +1041,39 @@ class AuditArcadeUI:
 
     def select_wifi_network(self) -> None:
         if not self.wifi_networks:
-            self.last_status = "ERRO"
-            self.last_output = "Nenhuma rede disponível."
+            self.last_status = "INFO"
+            self.last_output = "Nenhuma rede disponível. Você pode inserir o SSID manualmente."
             self.screen = "report"
             return
 
         selected = self.wifi_networks[self.wifi_network_selected]
         selected_ssid = selected["ssid"]
+        if selected_ssid.lower() == "inserir rede manualmente" or selected.get("security") == "manual":
+            selected_ssid = input("Nome da rede (SSID): ").strip()
+            if not selected_ssid:
+                self.last_status = "INFO"
+                self.last_output = "Nenhum SSID informado. Operação cancelada."
+                self.screen = "report"
+                return
+
+        self.wifi_pending_ssid = selected_ssid
+        self.wifi_pending_password = ""
+        self.wifi_pending_target = ""
+        self.wifi_pending_username = ""
+        self.wifi_pending_code = ""
+        self.last_status = "INFO"
+        self.last_output = f"Rede selecionada: {selected_ssid}"
+        self.screen = "wifi_password_prompt"
+
+    def finish_wifi_selection(self) -> None:
         try:
-            password = getpass.getpass(f"Senha da rede {selected_ssid} (deixe em branco se for aberta): ")
+            password = input(f"Senha da rede {self.wifi_pending_ssid} (deixe em branco se for aberta): ").strip()
             target = input("Host remoto da rede (vazio para executar localmente): ").strip()
             username = ""
             if target:
                 username = input(f"Usuário no host {target} (vazio para o usuário atual): ").strip() or getpass.getuser()
 
-            self.last_output = f"Rede selecionada: {selected_ssid}"
+            self.last_output = f"Rede selecionada: {self.wifi_pending_ssid}"
             if target:
                 self.last_output += f"\nTentando enviar código para {target}"
             else:
@@ -1054,7 +1086,7 @@ class AuditArcadeUI:
                 self.screen = "report"
                 return
 
-            if not self.connect_to_wifi_network(selected_ssid, password):
+            if not self.connect_to_wifi_network(self.wifi_pending_ssid, password):
                 self.last_output += "\nAviso: a conexão automática à rede não foi confirmada, mas o código será preparado para execução."
 
             self.run_powershell_code(code, target=target, username=username, password=password)
@@ -1336,6 +1368,8 @@ class AuditArcadeUI:
             self.draw_wifi_menu()
         elif self.screen == "wifi_network_menu":
             self.draw_wifi_network_menu()
+        elif self.screen == "wifi_password_prompt":
+            self.draw_wifi_password_prompt()
         elif self.screen == "bluetooth_menu":
             self.draw_bluetooth_menu()
         elif self.screen == "ferramentas_menu":
@@ -1388,6 +1422,19 @@ class AuditArcadeUI:
                 table.add_row(label, style=style)
         self.console.print(table)
         self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] selecionar rede\n[white]B[/white] voltar", border_style="white"))
+
+    def draw_wifi_password_prompt(self) -> None:
+        title = Text(self.font.renderText("SENHA"), style="bold white")
+        self.console.print(Panel(title, border_style="white", box=box.SQUARE))
+        panel = Panel.fit(
+            f"[bold white]Rede:[/bold white] {self.wifi_pending_ssid}\n\n"
+            "[white]Digite a senha da rede e pressione Enter.[/white]\n"
+            "[white]Deixe em branco para rede aberta.[/white]",
+            title="Wi‑Fi Login",
+            border_style="white",
+            box=box.ROUNDED,
+        )
+        self.console.print(panel)
 
     def draw_bluetooth_menu(self) -> None:
         selected = self.bt_items[self.bt_selected]
