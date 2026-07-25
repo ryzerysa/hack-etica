@@ -249,6 +249,13 @@ class AuditArcadeUI:
             self.handle_key(key)
 
     def read_key(self) -> str:
+        # If we're in the USB input screen, accept a raw line (don't lowercase)
+        if self.screen == "usb_input":
+            try:
+                return input("USB> ")
+            except EOFError:
+                return ""
+
         if os.name == "nt" or termios is None or tty is None:
             return input("Escolha: ").strip().lower()
 
@@ -454,9 +461,29 @@ class AuditArcadeUI:
 
     def run_usb_audit(self) -> None:
         self.last_command = "USB audit / Python"
-        self.message = "Digite seu código Python livremente e pressione Enter para executar"
-        self.usb_code = ""
-        self.screen = "usb_input"
+        self.message = "Modo de edição USB (multilinha). Digite linhas; quando terminar, digite .run em nova linha."
+        lines: list[str] = []
+        print("\nEntrando no modo multilinha para USB. Digite seu código. Terminar com uma linha contendo only: .run")
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                break
+            if line.strip() == ".run":
+                break
+            if line.strip() == ".cancel":
+                self.last_status = "ERRO"
+                self.last_output = "Edição USB cancelada pelo usuário."
+                self.message = "USB cancelado"
+                self.screen = "report"
+                return
+            lines.append(line)
+
+        code = "\n".join(lines)
+        self.usb_code = code
+        # Execute and export
+        self.run_usb_code(code)
+        self.screen = "report"
 
     def run_usb_code(self, code: str) -> None:
         if not code.strip():
@@ -677,6 +704,8 @@ class AuditArcadeUI:
             self.draw_bluetooth_menu()
         elif self.screen == "ferramentas_menu":
             self.draw_ferramentas_menu()
+        elif self.screen == "usb_input":
+            self.draw_usb_input()
         elif self.screen == "report":
             self.draw_report()
         elif self.screen == "about":
@@ -771,4 +800,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
