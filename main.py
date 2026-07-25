@@ -7,9 +7,15 @@ um visual em ASCII art e módulos seguros para diagnóstico de Wi-Fi,
 rede local, NFC e exportação local autorizada.
 """
 
-from curses import echo
+try:
+    from curses import echo
+except ImportError:  # pragma: no cover - Windows fallback
+    def echo(*args, **kwargs):
+        return None
+
 import getpass
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -40,7 +46,7 @@ class AuditArcadeUI:
         self.selected = 0
         self.menu_items = ["Wi-Fi", "Bluetooth", "Ferramentas", "Relatório", "Sobre"]
         # submenus
-        self.wifi_items = ["Scan APs", "Connect open AP", "Disconnect Wi-Fi", "Connection status", "Códigos"]
+        self.wifi_items = ["Scan APs", "Connect open AP", "Disconnect Wi-Fi", "Connection status", "Códigos", "Dispositivos"]
         self.bt_items = ["Bluejacking", "Bluesnarfing", "BLE Spoofing", "Scan Devices"]
         self.ferramentas_items = ["Phishing", "MITM", "DoS", "USB", "Hydra", "Network scan"]
         self.bt_devices = []
@@ -848,44 +854,291 @@ class AuditArcadeUI:
         elif name == "Códigos":
             self.run_network_code()
             return
+        elif name == "Dispositivos":
+            self.run_wifi_devices()
+            return
         self.screen = "report"
+
+    def parse_wifi_network_output(self, output: str) -> list[dict[str, str]]:
+        """Parse simple Wi-Fi scan output from Windows netsh or similar tools."""
+        networks: list[dict[str, str]] = []
+        current: dict[str, str] | None = None
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            ssid_match = re.search(r"SSID\s+\d+\s*:\s*(.+)", line)
+            if ssid_match:
+                ssid = ssid_match.group(1).strip().strip('"')
+                current = {"ssid": ssid, "security": "Open"}
+                networks.append(current)
+                continue
+            auth_match = re.search(r"Authentication\s*:\s*(.+)", line, re.IGNORECASE)
+            if current and auth_match:
+                current["security"] = auth_match.group(1).strip()
+        return networks
+
+    def get_available_wifi_networks(self) -> list[dict[str, str]]:
+        """List available Wi-Fi networks using the best available tool."""
+        if os.name == "nt":
+            try:
+                proc = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "netsh wlan show networks"],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                return self.parse_wifi_network_output(proc.stdout + proc.stderr)
+            except Exception:
+                return []
+
+        try:
+            proc = subprocess.run(
+                ["bash", "-lc", "(command -v nmcli >/dev/null 2>&1 && nmcli -t -f ssid,security dev wifi 2>/dev/null || command -v iwlist >/dev/null 2>&1 && iwlist scan 2>/dev/null || true)"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            output = proc.stdout + proc.stderr
+            if output:
+                networks = []
+                for line in output.splitlines():
+                    if ":" in line and not line.startswith("BSSID"):
+                        parts = line.split(":", 1)
+                        ssid = parts[0].strip().strip('"')
+                        security = parts[1].strip() if len(parts) > 1 else "Open"
+                        if ssid:
+                            networks.append({"ssid": ssid, "security": security})
+                return networks
+        except Exception:
+            return []
+        return []
+
+    def connect_to_wifi_network(self, ssid: str, password: str) -> bool:
+        """Try to connect to a selected Wi-Fi network when the environment supports it."""
+        if os.name != "nt":
+            return False
+        try:
+            if password:
+                command = f'netsh wlan connect name="{ssid}" ssid="{ssid}" keyMaterial="{password}"'
+            else:
+                command = f'netsh wlan connect name="{ssid}" ssid="{ssid}"'
+            proc = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=20)
+            return proc.returncode == 0
+        except Exception:
+            return False
+
+    def run_powershell_code(self, code: str, target: str = "", username: str = "", password: str = "") -> None:
+        self.last_command = "PowerShell execution"
+        self.message = "Executando código automaticamente em PowerShell"
+        try:
+            if target:
+                escaped_code = code.replace("'", "''")
+                escaped_password = password.replace("'", "''")
+                ps_script = (
+                    f"$sec = ConvertTo-SecureString '{escaped_password}' -AsPlainText -Force;"
+                    f"$cred = New-Object System.Management.Automation.PSCredential('{username}', $sec);"
+                    f"Invoke-Command -ComputerName '{target}' -Credential $cred -ScriptBlock {{ {escaped_code} }}"
+                )
+                cmd = ["powershell", "-NoProfile", "-Command", ps_script]
+            else:
+                cmd = ["powershell", "-NoProfile", "-Command", code]
+
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            self.last_output = proc.stdout + ('\n' + proc.stderr if proc.stderr else '')
+            self.last_status = "OK" if proc.returncode == 0 else "ERRO"
+        except FileNotFoundError:
+            self.last_status = "ERRO"
+            self.last_output = "PowerShell não está disponível no ambiente atual."
+        except Exception as e:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha ao executar o código em PowerShell: {e}"
 
     def run_network_code(self) -> None:
         self.last_command = "Wi-Fi codes / network execution"
-        self.message = "Modo Wi-Fi: digite host de rede e código para executar em destino remoto ou local."
+        self.message = "Modo Wi-Fi: selecione uma rede, informe a senha e execute um código em PowerShell."
         try:
-            host = input('Host de destino (IP ou hostname, vazio = local): ').strip()
-            if not host:
-                self.last_output = 'Execução local activada. Digite código Python:'
-                code = input('Código Python> ')
-                self.run_python_code(code)
+            networks = self.get_available_wifi_networks()
+            if not networks:
+                self.last_status = "ERRO"
+                self.last_output = "Nenhuma rede Wi-Fi disponível para listar no momento."
+                self.screen = "report"
+                return
+
+            print("\nRedes Wi-Fi disponíveis:")
+            for idx, net in enumerate(networks, 1):
+                print(f"{idx}. {net['ssid']} [{net['security']}]")
+
+            choice = input("\nEscolha a rede (número): ").strip()
+            if not choice.isdigit():
+                self.last_status = "ERRO"
+                self.last_output = "Seleção inválida."
+                self.screen = "report"
+                return
+
+            index = int(choice) - 1
+            if index < 0 or index >= len(networks):
+                self.last_status = "ERRO"
+                self.last_output = "Seleção fora da lista."
+                self.screen = "report"
+                return
+
+            selected_ssid = networks[index]["ssid"]
+            password = getpass.getpass(f"Senha da rede {selected_ssid} (deixe em branco se a rede for aberta): ")
+            target = input("Host remoto da rede (vazio para executar localmente): ").strip()
+            username = ""
+            if target:
+                username = input(f"Usuário no host {target} (vazio para o usuário atual): ").strip() or getpass.getuser()
+
+            self.last_output = f"Rede selecionada: {selected_ssid}"
+            if target:
+                self.last_output += f"\nTentando enviar código para {target}"
+            else:
+                self.last_output += "\nExecutando localmente em PowerShell"
+
+            code = input("Código PowerShell a executar: ").strip()
+            if not code:
+                self.last_status = "ERRO"
+                self.last_output = "Nenhum código informado."
+                self.screen = "report"
+                return
+
+            if not self.connect_to_wifi_network(selected_ssid, password):
+                self.last_output += "\nAviso: a conexão automática à rede não foi confirmada, mas o código será preparado para execução."
+
+            self.run_powershell_code(code, target=target, username=username, password=password)
+        except KeyboardInterrupt:
+            self.last_status = "ERRO"
+            self.last_output = "Operação cancelada pelo usuário."
+        except Exception as e:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha na execução de código de rede: {e}"
+        self.screen = "report"
+
+    def discover_network_hosts(self) -> list[str]:
+        """Discover hosts on the local network. Returns a list of IP strings."""
+        hosts: list[str] = []
+        try:
+            # try nmap first
+            try:
+                # detect local network CIDR
+                proc_net = subprocess.run(["bash", "-lc", "ip -o -f inet addr show | awk '/scope global/ {print $4; exit}'"], capture_output=True, text=True, timeout=5)
+                net = proc_net.stdout.strip().splitlines()[0] if proc_net.stdout else ""
+            except Exception:
+                net = ""
+
+            if net:
+                proc = subprocess.run(["nmap", "-sn", net], capture_output=True, text=True, timeout=30)
+                out = proc.stdout
+                for line in out.splitlines():
+                    if line.strip().startswith("Nmap scan report for"):
+                        parts = line.strip().split()
+                        ip = parts[-1]
+                        hosts.append(ip)
+                if hosts:
+                    return hosts
+
+            # fallback: arp table
+            try:
+                proc2 = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10)
+                for line in proc2.stdout.splitlines():
+                    parts = line.split()
+                    for tok in parts:
+                        if tok.count('.') == 3:
+                            hosts.append(tok)
+                return list(dict.fromkeys(hosts))
+            except Exception:
+                return []
+        except Exception:
+            return []
+
+    def run_wifi_devices(self) -> None:
+        self.last_command = "Wi‑Fi: listar dispositivos"
+        self.message = "Descobrindo hosts na rede local..."
+        hosts = self.discover_network_hosts()
+        if not hosts:
+            self.last_status = "ERRO"
+            self.last_output = "Nenhum host descoberto na rede. Verifique permissões e disponibilidade do nmap/arp."
+            self.screen = "report"
+            return
+
+        # present list and ask user to choose
+        print('\nHosts descobertos:')
+        for i, h in enumerate(hosts, 1):
+            print(f"{i}. {h}")
+        try:
+            sel = input('\nEscolha host número para enviar código (ou vazio para cancelar): ').strip()
+        except EOFError:
+            sel = ''
+        if not sel:
+            self.last_status = "OK"
+            self.last_output = "Operação cancelada pelo usuário."
+            self.screen = "report"
+            return
+        try:
+            idx = int(sel) - 1
+            target = hosts[idx]
+        except Exception:
+            self.last_status = "ERRO"
+            self.last_output = "Seleção inválida." 
+            self.screen = "report"
+            return
+
+        self.send_code_to_host(target)
+
+    def send_code_to_host(self, host: str) -> None:
+        """Send code to a host. Supports SSH (if available) or PowerShell remoting (Invoke-Command).
+        The target must allow remote execution (SSH/WinRM) and credentials must be provided by the user.
+        """
+        try:
+            method = input('Método (ssh/ps) [ps]: ').strip() or 'ps'
+        except EOFError:
+            method = 'ps'
+
+        try:
+            if method == 'ssh':
+                user = input('Usuário SSH: ').strip() or getpass.getuser()
+                code = input('Código a executar (em shell remoto): ').strip()
+                if not code:
+                    self.last_status = 'ERRO'
+                    self.last_output = 'Nenhum código informado.'
+                    self.screen = 'report'
+                    return
+                ssh_cmd = ['ssh', f'{user}@{host}', code]
+                pr = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=60)
+                self.last_output = pr.stdout + ('\n' + pr.stderr if pr.stderr else '')
+                self.last_status = 'OK' if pr.returncode == 0 else 'ERRO'
                 self.screen = 'report'
                 return
 
-            port = input('Porta SSH ou comando (vazio=22): ').strip() or '22'
-            code = input('Código Python remoto> ').strip()
+            # default: PowerShell remoting (needs WinRM/PSRemoting enabled on target)
+            user = input('Usuário (Windows) para remoting: ').strip() or getpass.getuser()
+            import getpass as _gp
+            pwd = _gp.getpass('Senha: ')
+            code = input('Código PowerShell a executar: ').strip()
             if not code:
                 self.last_status = 'ERRO'
                 self.last_output = 'Nenhum código informado.'
                 self.screen = 'report'
                 return
 
-            self.last_output = f'Executando no host {host}:{port}...'
-            if port == '22':
-                user = input('Usuário SSH (ou vazio para atual): ').strip() or getpass.getuser()
-                ssh_cmd = ['ssh', f'{user}@{host}', 'python3', '-c', code]
-                proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=60)
-                self.last_output = proc.stdout + ('\n' + proc.stderr if proc.stderr else '')
-                self.last_status = 'OK' if proc.returncode == 0 else 'ERRO'
-            else:
-                # se a porta não é 22, tenta comando local com host como comando em shell
-                proc = subprocess.run(['bash', '-lc', code], capture_output=True, text=True, timeout=60)
-                self.last_output = proc.stdout + ('\n' + proc.stderr if proc.stderr else '')
-                self.last_status = 'OK' if proc.returncode == 0 else 'ERRO'
+            # Build PowerShell Invoke-Command string (note: requires remoting enabled on target)
+            ps_script = (
+                f"$sec=ConvertTo-SecureString '{pwd}' -AsPlainText -Force;"
+                f"$cred=New-Object System.Management.Automation.PSCredential('{user}',$sec);"
+                f"Invoke-Command -ComputerName {host} -Credential $cred -ScriptBlock {{{code}}}"
+            )
+            cmd = ['powershell', '-NoProfile', '-Command', ps_script]
+            pr = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            self.last_output = pr.stdout + ('\n' + pr.stderr if pr.stderr else '')
+            self.last_status = 'OK' if pr.returncode == 0 else 'ERRO'
+            self.screen = 'report'
+            return
         except Exception as e:
             self.last_status = 'ERRO'
-            self.last_output = f'Falha na execução de código de rede: {e}'
-        self.screen = 'report'
+            self.last_output = f'Erro ao enviar código para {host}: {e}'
+            self.screen = 'report'
+            return
 
     def run_bluetooth_tool(self, name: str) -> None:
         self.last_command = f"Bluetooth tool: {name}"
