@@ -54,6 +54,8 @@ class AuditArcadeUI:
         self.bt_action_items = ["Connect", "Pair", "Disconnect", "Info"]
         self.bt_action_selected = 0
         self.wifi_selected = 0
+        self.wifi_networks = []
+        self.wifi_network_selected = 0
         self.bt_selected = 0
         self.ferramentas_selected = 0
         self.last_status = "Pronto"
@@ -380,9 +382,19 @@ class AuditArcadeUI:
                 self.wifi_selected = (self.wifi_selected + 1) % len(self.wifi_items)
             elif key in {"enter", "e", "selecionar", ""}:
                 self.run_wifi_tool(self.wifi_items[self.wifi_selected])
-                self.screen = "report"
+                if self.screen != "wifi_network_menu":
+                    self.screen = "report"
             elif key in {"b", "back", "esc"}:
                 self.screen = "menu"
+        elif self.screen == "wifi_network_menu":
+            if key in {"a", "left", "esquerda", "w", "up"}:
+                self.wifi_network_selected = (self.wifi_network_selected - 1) % len(self.wifi_networks) if self.wifi_networks else 0
+            elif key in {"d", "right", "direita", "s", "down"}:
+                self.wifi_network_selected = (self.wifi_network_selected + 1) % len(self.wifi_networks) if self.wifi_networks else 0
+            elif key in {"enter", "e", "selecionar", ""}:
+                self.select_wifi_network()
+            elif key in {"b", "back", "esc"}:
+                self.screen = "wifi_menu"
         elif self.screen == "bluetooth_menu":
             if key in {"a", "left", "esquerda", "w", "up"}:
                 self.bt_selected = (self.bt_selected - 1) % len(self.bt_items)
@@ -992,7 +1004,7 @@ class AuditArcadeUI:
 
     def run_network_code(self) -> None:
         self.last_command = "Wi-Fi codes / network execution"
-        self.message = "Modo Wi-Fi: selecione uma rede, informe a senha e execute um código em PowerShell."
+        self.message = "Abrindo menu visual de redes Wi-Fi"
         try:
             networks = self.get_available_wifi_networks()
             if not networks:
@@ -1001,26 +1013,29 @@ class AuditArcadeUI:
                 self.screen = "report"
                 return
 
-            print("\nRedes Wi-Fi disponíveis:")
-            for idx, net in enumerate(networks, 1):
-                print(f"{idx}. {net['ssid']} [{net['security']}]")
+            self.wifi_networks = networks
+            self.wifi_network_selected = 0
+            self.screen = "wifi_network_menu"
+        except KeyboardInterrupt:
+            self.last_status = "ERRO"
+            self.last_output = "Operação cancelada pelo usuário."
+            self.screen = "report"
+        except Exception as e:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha na execução de código de rede: {e}"
+            self.screen = "report"
 
-            choice = input("\nEscolha a rede (número): ").strip()
-            if not choice.isdigit():
-                self.last_status = "ERRO"
-                self.last_output = "Seleção inválida."
-                self.screen = "report"
-                return
+    def select_wifi_network(self) -> None:
+        if not self.wifi_networks:
+            self.last_status = "ERRO"
+            self.last_output = "Nenhuma rede disponível."
+            self.screen = "report"
+            return
 
-            index = int(choice) - 1
-            if index < 0 or index >= len(networks):
-                self.last_status = "ERRO"
-                self.last_output = "Seleção fora da lista."
-                self.screen = "report"
-                return
-
-            selected_ssid = networks[index]["ssid"]
-            password = getpass.getpass(f"Senha da rede {selected_ssid} (deixe em branco se a rede for aberta): ")
+        selected = self.wifi_networks[self.wifi_network_selected]
+        selected_ssid = selected["ssid"]
+        try:
+            password = getpass.getpass(f"Senha da rede {selected_ssid} (deixe em branco se for aberta): ")
             target = input("Host remoto da rede (vazio para executar localmente): ").strip()
             username = ""
             if target:
@@ -1048,7 +1063,7 @@ class AuditArcadeUI:
             self.last_output = "Operação cancelada pelo usuário."
         except Exception as e:
             self.last_status = "ERRO"
-            self.last_output = f"Falha na execução de código de rede: {e}"
+            self.last_output = f"Falha ao preparar a execução da rede: {e}"
         self.screen = "report"
 
     def discover_network_hosts(self) -> list[str]:
@@ -1319,6 +1334,8 @@ class AuditArcadeUI:
             self.draw_menu()
         elif self.screen == "wifi_menu":
             self.draw_wifi_menu()
+        elif self.screen == "wifi_network_menu":
+            self.draw_wifi_network_menu()
         elif self.screen == "bluetooth_menu":
             self.draw_bluetooth_menu()
         elif self.screen == "ferramentas_menu":
@@ -1355,7 +1372,22 @@ class AuditArcadeUI:
             style = "bold black on white" if idx == self.wifi_selected else "white"
             table.add_row(f"> {item}" if idx == self.wifi_selected else f"  {item}", style=style)
         self.console.print(table)
-        self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar\n[white]Códigos[/white] usa SSH/exec local para rodar código em hosts de rede", border_style="white"))
+        self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar\n[white]Códigos[/white] abre menu visual de redes", border_style="white"))
+
+    def draw_wifi_network_menu(self) -> None:
+        title = Text(self.font.renderText("REDES"), style="bold white")
+        self.console.print(Panel(title, border_style="white", box=box.SQUARE))
+        table = Table(title="Redes Wi‑Fi disponíveis", box=box.SIMPLE, show_header=False)
+        table.add_column("Rede", style="bold white")
+        if not self.wifi_networks:
+            table.add_row("Nenhuma rede detectada")
+        else:
+            for idx, net in enumerate(self.wifi_networks):
+                style = "bold black on white" if idx == self.wifi_network_selected else "white"
+                label = f"> {net['ssid']}" if idx == self.wifi_network_selected else f"  {net['ssid']}"
+                table.add_row(label, style=style)
+        self.console.print(table)
+        self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] selecionar rede\n[white]B[/white] voltar", border_style="white"))
 
     def draw_bluetooth_menu(self) -> None:
         selected = self.bt_items[self.bt_selected]
