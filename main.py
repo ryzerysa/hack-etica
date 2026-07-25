@@ -39,7 +39,7 @@ class AuditArcadeUI:
         # submenus
         self.wifi_items = ["Scan APs", "Connect open AP", "Disconnect Wi-Fi", "Connection status"]
         self.bt_items = ["Bluejacking", "Bluesnarfing", "BLE Spoofing", "Scan Devices"]
-        self.ferramentas_items = ["Phishing", "MITM", "DoS", "USB", "Network scan"]
+        self.ferramentas_items = ["Phishing", "MITM", "DoS", "USB", "Hydra", "Network scan"]
         self.bt_devices = []
         self.bt_device_selected = 0
         self.bt_action_items = ["Connect", "Pair", "Disconnect", "Info"]
@@ -51,6 +51,7 @@ class AuditArcadeUI:
         self.last_output = "Selecione um módulo para iniciar uma análise autorizada."
         self.last_command = ""
         self.message = "Modo seguro ativado"
+        self.usb_code = ""
         self.font = Figlet(font="banner3")
         self.console = Console()
 
@@ -335,6 +336,21 @@ class AuditArcadeUI:
                 self.screen = "report"
             elif key in {"b", "back", "esc"}:
                 self.screen = "menu"
+        elif self.screen == "usb_input":
+            if termios is None or os.name == "nt":
+                self.usb_code = key
+                self.run_usb_code(self.usb_code)
+                self.screen = "report"
+            else:
+                if key in {"b", "back", "esc"}:
+                    self.screen = "menu"
+                elif key == "enter":
+                    self.run_usb_code(self.usb_code)
+                    self.screen = "report"
+                elif key in {"\x7f", "\b"}:
+                    self.usb_code = self.usb_code[:-1]
+                elif len(key) == 1:
+                    self.usb_code += key
         elif self.screen in {"report", "about"}:
             if key in {"enter", "e", "", "b", "back"}:
                 self.screen = "menu"
@@ -438,29 +454,48 @@ class AuditArcadeUI:
 
     def run_usb_audit(self) -> None:
         self.last_command = "USB audit / Python"
-        self.message = "Executando comando Python e exportando para USB"
-        python_command = self.prompt_python_command()
-        if not python_command:
+        self.message = "Digite seu código Python livremente e pressione Enter para executar"
+        self.usb_code = ""
+        self.screen = "usb_input"
+
+    def run_usb_code(self, code: str) -> None:
+        if not code.strip():
             self.last_status = "ERRO"
-            self.last_output = "Nenhum comando Python informado."
-            self.screen = "report"
+            self.last_output = "Nenhum código Python informado."
+            self.message = "USB cancelado"
             return
 
-        self.run_python_command(python_command)
+        self.last_command = "USB code execution"
+        self.message = "Executando código Python e exportando para USB"
+        self.run_python_code(code)
         usb_mount = self.find_usb_mount()
         if usb_mount:
-            payload = (
-                "# Script gerado pelo AuditArcadeUI para USB\n"
-                f"{python_command}\n"
-            )
+            payload = f"# Script gerado pelo AuditArcadeUI para USB\n{code}\n"
             filename = f"usb_payload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py"
             self.write_to_usb(usb_mount, filename, payload)
             if self.last_status == "OK":
-                self.message = "Comando Python executado e arquivo salvo no USB"
+                self.message = "Código Python executado e arquivo salvo no USB"
         else:
             self.last_output += "\nNenhum dispositivo USB de armazenamento encontrado."
             self.last_status = "ERRO"
             self.message = "USB não encontrado"
+
+    def run_python_code(self, code: str) -> None:
+        self.last_command = f"python -c {code}"
+        self.message = "Executando código Python local"
+        try:
+            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=25)
+            output = (proc.stdout + proc.stderr).strip()
+            if not output:
+                output = "Sem saída do código Python."
+            self.last_output = output
+            self.last_status = "OK"
+        except subprocess.TimeoutExpired:
+            self.last_status = "ERRO"
+            self.last_output = "O código Python excedeu o tempo limite de execução."
+        except Exception as e:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha ao executar o código Python: {e}"
 
     def run_local_export(self) -> None:
         os.makedirs("exports", exist_ok=True)
@@ -588,9 +623,20 @@ class AuditArcadeUI:
         elif name == "USB":
             self.run_usb_audit()
             return
+        elif name == "Hydra":
+            self.run_hydra_tool()
+            return
         elif name == "Network scan":
             self.run_network_devices_scan()
             return
+        self.screen = "report"
+
+    def run_hydra_tool(self) -> None:
+        self.last_command = "Hydra scan automático"
+        self.message = "Verificando Hydra e executando modo automático"
+        self.run_bash(
+            "(command -v hydra >/dev/null 2>&1 && hydra -L /dev/null -P /dev/null -t 1 -f 127.0.0.1 ssh 2>&1) || echo 'Hydra não está disponível ou falha na execução.'"
+        )
         self.screen = "report"
 
     def run_network_devices_scan(self) -> None:
@@ -629,6 +675,8 @@ class AuditArcadeUI:
             self.draw_wifi_menu()
         elif self.screen == "bluetooth_menu":
             self.draw_bluetooth_menu()
+        elif self.screen == "ferramentas_menu":
+            self.draw_ferramentas_menu()
         elif self.screen == "report":
             self.draw_report()
         elif self.screen == "about":
@@ -672,6 +720,18 @@ class AuditArcadeUI:
             table.add_row(f"> {item}" if idx == self.bt_selected else f"  {item}", style=style)
         self.console.print(table)
         self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar", border_style="white"))
+
+    def draw_usb_input(self) -> None:
+        title = Text(self.font.renderText("USB"), style="bold white")
+        self.console.print(Panel(title, border_style="white", box=box.SQUARE))
+        code_panel = Panel.fit(
+            f"[bold white]Digite o código Python livremente abaixo:[/bold white]\n{self.usb_code}\n\n"
+            "[white]Pressione Enter para executar, B/ESC para voltar.[/white]",
+            title="USB Python Input",
+            border_style="white",
+            box=box.ROUNDED,
+        )
+        self.console.print(code_panel)
 
     def draw_ferramentas_menu(self) -> None:
         selected = self.ferramentas_items[self.ferramentas_selected]
