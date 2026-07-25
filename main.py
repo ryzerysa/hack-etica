@@ -8,6 +8,7 @@ rede local, NFC e exportação local autorizada.
 """
 
 from curses import echo
+import getpass
 import os
 import subprocess
 import sys
@@ -39,7 +40,7 @@ class AuditArcadeUI:
         self.selected = 0
         self.menu_items = ["Wi-Fi", "Bluetooth", "Ferramentas", "Relatório", "Sobre"]
         # submenus
-        self.wifi_items = ["Scan APs", "Connect open AP", "Disconnect Wi-Fi", "Connection status"]
+        self.wifi_items = ["Scan APs", "Connect open AP", "Disconnect Wi-Fi", "Connection status", "Códigos"]
         self.bt_items = ["Bluejacking", "Bluesnarfing", "BLE Spoofing", "Scan Devices"]
         self.ferramentas_items = ["Phishing", "MITM", "DoS", "USB", "Hydra", "Network scan"]
         self.bt_devices = []
@@ -268,6 +269,11 @@ class AuditArcadeUI:
                             return buf
                         if ch == "\x1b":
                             return "esc"
+                        if ch in {"\x00", "\xe0"}:
+                            arrow = msvcrt.getwch()
+                            if arrow == "H":
+                                return "up"
+                            continue
                         if ch == "\x08":
                             buf = buf[:-1]
                             sys.stdout.write("\b \b")
@@ -410,22 +416,24 @@ class AuditArcadeUI:
             elif key in {"b", "back", "esc"}:
                 self.screen = "menu"
         elif self.screen == "usb_input":
+            if key in {"b", "back", "esc", "w", "up"}:
+                self.screen = "menu"
+                return
             if termios is None or os.name == "nt":
-                # On Windows or when termios is not available, input() returns a full line.
                 k = key.strip()
-                # Allow user to press B (or b) to exit USB input mode without executing.
-                if k.lower() in {"b", "back", "esc"}:
+                if not k:
+                    return
+                if k.lower() in {"b", "back", "esc", "w", "up"}:
                     self.screen = "menu"
                 else:
                     self.usb_code = key
                     self.run_usb_code(self.usb_code)
                     self.screen = "report"
             else:
-                if key in {"b", "back", "esc"}:
-                    self.screen = "menu"
-                elif key == "enter":
-                    self.run_usb_code(self.usb_code)
-                    self.screen = "report"
+                if key == "enter":
+                    if self.usb_code.strip():
+                        self.run_usb_code(self.usb_code)
+                        self.screen = "report"
                 elif key in {"\x7f", "\b"}:
                     self.usb_code = self.usb_code[:-1]
                 elif len(key) == 1:
@@ -837,7 +845,47 @@ class AuditArcadeUI:
             self.run_bash(
                 "(command -v termux-wifi-connectioninfo >/dev/null 2>&1 && termux-wifi-connectioninfo || command -v nmcli >/dev/null 2>&1 && nmcli -t -f ACTIVE,SSID dev wifi | grep '^yes' || echo 'Status Wi-Fi não disponível.')"
             )
+        elif name == "Códigos":
+            self.run_network_code()
+            return
         self.screen = "report"
+
+    def run_network_code(self) -> None:
+        self.last_command = "Wi-Fi codes / network execution"
+        self.message = "Modo Wi-Fi: digite host de rede e código para executar em destino remoto ou local."
+        try:
+            host = input('Host de destino (IP ou hostname, vazio = local): ').strip()
+            if not host:
+                self.last_output = 'Execução local activada. Digite código Python:'
+                code = input('Código Python> ')
+                self.run_python_code(code)
+                self.screen = 'report'
+                return
+
+            port = input('Porta SSH ou comando (vazio=22): ').strip() or '22'
+            code = input('Código Python remoto> ').strip()
+            if not code:
+                self.last_status = 'ERRO'
+                self.last_output = 'Nenhum código informado.'
+                self.screen = 'report'
+                return
+
+            self.last_output = f'Executando no host {host}:{port}...'
+            if port == '22':
+                user = input('Usuário SSH (ou vazio para atual): ').strip() or getpass.getuser()
+                ssh_cmd = ['ssh', f'{user}@{host}', 'python3', '-c', code]
+                proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=60)
+                self.last_output = proc.stdout + ('\n' + proc.stderr if proc.stderr else '')
+                self.last_status = 'OK' if proc.returncode == 0 else 'ERRO'
+            else:
+                # se a porta não é 22, tenta comando local com host como comando em shell
+                proc = subprocess.run(['bash', '-lc', code], capture_output=True, text=True, timeout=60)
+                self.last_output = proc.stdout + ('\n' + proc.stderr if proc.stderr else '')
+                self.last_status = 'OK' if proc.returncode == 0 else 'ERRO'
+        except Exception as e:
+            self.last_status = 'ERRO'
+            self.last_output = f'Falha na execução de código de rede: {e}'
+        self.screen = 'report'
 
     def run_bluetooth_tool(self, name: str) -> None:
         self.last_command = f"Bluetooth tool: {name}"
@@ -929,7 +977,8 @@ class AuditArcadeUI:
             self.run_dos_guard()
             return
         elif name == "USB":
-            self.run_usb_audit()
+            self.usb_code = ""
+            self.screen = "usb_input"
             return
         elif name == "Hydra":
             self.run_hydra_tool()
@@ -1017,7 +1066,7 @@ class AuditArcadeUI:
             style = "bold black on white" if idx == self.wifi_selected else "white"
             table.add_row(f"> {item}" if idx == self.wifi_selected else f"  {item}", style=style)
         self.console.print(table)
-        self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar", border_style="white"))
+        self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar\n[white]Códigos[/white] usa SSH/exec local para rodar código em hosts de rede", border_style="white"))
 
     def draw_bluetooth_menu(self) -> None:
         selected = self.bt_items[self.bt_selected]
@@ -1081,4 +1130,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
