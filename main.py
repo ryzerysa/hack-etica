@@ -253,10 +253,74 @@ class AuditArcadeUI:
     def read_key(self) -> str:
         # If we're in the USB input screen, accept a raw line (don't lowercase)
         if self.screen == "usb_input":
-            try:
-                return input("USB> ")
-            except EOFError:
-                return ""
+            # Provide raw key capture so ESC can be detected to exit USB mode
+            # Windows: use msvcrt.getwch; Unix: use termios/tty in raw mode
+            if os.name == "nt":
+                try:
+                    import msvcrt
+                    buf = ""
+                    sys.stdout.write("USB> ")
+                    sys.stdout.flush()
+                    while True:
+                        ch = msvcrt.getwch()
+                        if ch in {"\r", "\n"}:
+                            print()
+                            return buf
+                        if ch == "\x1b":
+                            return "esc"
+                        if ch == "\x08":
+                            buf = buf[:-1]
+                            sys.stdout.write("\b \b")
+                            sys.stdout.flush()
+                        else:
+                            buf += ch
+                            sys.stdout.write(ch)
+                            sys.stdout.flush()
+                except Exception:
+                    try:
+                        return input("USB> ")
+                    except EOFError:
+                        return ""
+            else:
+                # POSIX systems: read raw characters so ESC is detected immediately
+                try:
+                    fd = sys.stdin.fileno()
+                    old_settings = termios.tcgetattr(fd)
+                    tty.setraw(fd)
+                    buf = ""
+                    sys.stdout.write("USB> ")
+                    sys.stdout.flush()
+                    while True:
+                        ch = sys.stdin.read(1)
+                        if ch == "\x1b":
+                            # consume any extra bytes to avoid leaving escape chars
+                            # try to non-blocking read remaining seq (best-effort)
+                            try:
+                                seq = sys.stdin.read(2)
+                            except Exception:
+                                seq = ""
+                            return "esc"
+                        if ch in {"\r", "\n"}:
+                            print()
+                            return buf
+                        if ch in {"\x7f", "\b"}:
+                            buf = buf[:-1]
+                            sys.stdout.write("\b \b")
+                            sys.stdout.flush()
+                        else:
+                            buf += ch
+                            sys.stdout.write(ch)
+                            sys.stdout.flush()
+                except Exception:
+                    try:
+                        return input("USB> ")
+                    except EOFError:
+                        return ""
+                finally:
+                    try:
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    except Exception:
+                        pass
 
         if os.name == "nt" or termios is None or tty is None:
             return input("Escolha: ").strip().lower()
@@ -493,7 +557,27 @@ class AuditArcadeUI:
         # Try a few common remote locations and python binaries
         remote_candidates = [f"/data/local/tmp/{filename}", f"/sdcard/{filename}"]
         python_bins = ["python3", "python"]
+        # common termux/python paths
+        termux_bins = ["/data/data/com.termux/files/usr/bin/python3", "/data/data/com.termux/files/usr/bin/python"]
         try:
+            # Try streaming the script via stdin to remote python (works even without writable remote path)
+            try:
+                with open(local_path, "rb") as fh:
+                    content_bytes = fh.read()
+                for py in python_bins + termux_bins:
+                    try:
+                        self.last_output += f"\nTentando execução via stdin com {py}..."
+                        prun_pipe = subprocess.run(["adb", "shell", py, "-"], input=content_bytes, capture_output=True, timeout=60)
+                    except Exception as e:
+                        self.last_output += f"\nFalha ao executar via stdin ({py}): {e}"
+                        continue
+                    self.last_output += f"\nExecução adb stdin ({py}) returncode={prun_pipe.returncode}\nstdout:\n{prun_pipe.stdout.decode(errors='ignore') if isinstance(prun_pipe.stdout, bytes) else prun_pipe.stdout}\nstderr:\n{prun_pipe.stderr.decode(errors='ignore') if isinstance(prun_pipe.stderr, bytes) else prun_pipe.stderr}"
+                    if prun_pipe.returncode == 0:
+                        self.last_status = "OK"
+                        return
+            except Exception:
+                pass
+
             for remote in remote_candidates:
                 try:
                     ppush = subprocess.run(["adb", "push", local_path, remote], capture_output=True, text=True, timeout=20)
