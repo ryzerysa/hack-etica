@@ -381,20 +381,86 @@ class AuditArcadeUI:
     def run_dos_guard(self) -> None:
         self.run_bash("(ss -tuln 2>/dev/null || netstat -tuln 2>/dev/null || true); echo '---'; (curl -I -L --max-time 10 https://example.com 2>/dev/null | head -20 || true)")
 
+    def prompt_python_command(self) -> str:
+        print("\nDigite um comando Python para executar (por exemplo: print('hello'), 2+2):")
+        return input("Python> ").strip()
+
+    def run_python_command(self, command: str) -> None:
+        self.last_command = f"python -c {command}"
+        self.message = "Executando comando Python local"
+        try:
+            proc = subprocess.run([sys.executable, "-c", command], capture_output=True, text=True, timeout=25)
+            output = (proc.stdout + proc.stderr).strip()
+            if not output:
+                output = "Sem saída do comando Python."
+            self.last_output = output
+            self.last_status = "OK"
+        except subprocess.TimeoutExpired:
+            self.last_status = "ERRO"
+            self.last_output = "O comando Python excedeu o tempo limite de execução."
+        except Exception as e:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha ao executar o comando Python: {e}"
+
+    def find_usb_mount(self) -> str | None:
+        candidates = [
+            "/storage",
+            "/mnt/media_rw",
+            "/mnt/usb",
+            "/mnt/sdcard",
+            "/sdcard",
+            "D:",
+            "E:",
+            "F:",
+            "G:",
+        ]
+        for base in candidates:
+            if os.path.isdir(base):
+                try:
+                    for name in os.listdir(base):
+                        path = os.path.join(base, name)
+                        if os.path.isdir(path) and os.access(path, os.W_OK):
+                            return path
+                except PermissionError:
+                    continue
+        return None
+
+    def write_to_usb(self, usb_path: str, filename: str, content: str) -> None:
+        try:
+            target = os.path.join(usb_path, filename)
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(content)
+            self.last_output += f"\nArquivo gravado em {target}"
+            self.last_status = "OK"
+        except Exception as e:
+            self.last_status = "ERRO"
+            self.last_output += f"\nFalha ao gravar no USB: {e}"
+
     def run_usb_audit(self) -> None:
-        self.run_bash(
-            '''
-            sleep 3
-            for ip in 192.168.42.1 192.168.42.129 192.168.137.1 192.168.137.1; do
-                if ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
-                    echo "PC encontrado em $ip"
-                    ssh usuario@$ip
-                    exit
-                fi
-            done
-            echo "Não encontrei o PC. Verifique se o tethering está ativo."
-            '''
-        )
+        self.last_command = "USB audit / Python"
+        self.message = "Executando comando Python e exportando para USB"
+        python_command = self.prompt_python_command()
+        if not python_command:
+            self.last_status = "ERRO"
+            self.last_output = "Nenhum comando Python informado."
+            self.screen = "report"
+            return
+
+        self.run_python_command(python_command)
+        usb_mount = self.find_usb_mount()
+        if usb_mount:
+            payload = (
+                "# Script gerado pelo AuditArcadeUI para USB\n"
+                f"{python_command}\n"
+            )
+            filename = f"usb_payload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py"
+            self.write_to_usb(usb_mount, filename, payload)
+            if self.last_status == "OK":
+                self.message = "Comando Python executado e arquivo salvo no USB"
+        else:
+            self.last_output += "\nNenhum dispositivo USB de armazenamento encontrado."
+            self.last_status = "ERRO"
+            self.message = "USB não encontrado"
 
     def run_local_export(self) -> None:
         os.makedirs("exports", exist_ok=True)
