@@ -1,0 +1,3 @@
+pyfiglet
+rich
+windows-curses; platform_system == "Windows"
