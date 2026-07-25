@@ -1102,9 +1102,35 @@ class AuditArcadeUI:
         """Discover hosts on the local network. Returns a list of IP strings."""
         hosts: list[str] = []
         try:
-            # try nmap first
+            if os.name == "nt":
+                proc = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "arp -a"],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                for line in proc.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        token = parts[0]
+                        if token.count(".") == 3:
+                            hosts.append(token)
+                if hosts:
+                    return list(dict.fromkeys(hosts))
+
+                proc2 = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "Get-NetNeighbor | Select-Object -ExpandProperty IPAddress"],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                for line in proc2.stdout.splitlines():
+                    line = line.strip()
+                    if line and line.count(".") == 3:
+                        hosts.append(line)
+                return list(dict.fromkeys(hosts))
+
             try:
-                # detect local network CIDR
                 proc_net = subprocess.run(["bash", "-lc", "ip -o -f inet addr show | awk '/scope global/ {print $4; exit}'"], capture_output=True, text=True, timeout=5)
                 net = proc_net.stdout.strip().splitlines()[0] if proc_net.stdout else ""
             except Exception:
@@ -1121,7 +1147,6 @@ class AuditArcadeUI:
                 if hosts:
                     return hosts
 
-            # fallback: arp table
             try:
                 proc2 = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=10)
                 for line in proc2.stdout.splitlines():
@@ -1140,34 +1165,14 @@ class AuditArcadeUI:
         self.message = "Descobrindo hosts na rede local..."
         hosts = self.discover_network_hosts()
         if not hosts:
-            self.last_status = "ERRO"
-            self.last_output = "Nenhum host descoberto na rede. Verifique permissões e disponibilidade do nmap/arp."
+            self.last_status = "INFO"
+            self.last_output = "Nenhum dispositivo encontrado na rede local no momento."
             self.screen = "report"
             return
 
-        # present list and ask user to choose
-        print('\nHosts descobertos:')
-        for i, h in enumerate(hosts, 1):
-            print(f"{i}. {h}")
-        try:
-            sel = input('\nEscolha host número para enviar código (ou vazio para cancelar): ').strip()
-        except EOFError:
-            sel = ''
-        if not sel:
-            self.last_status = "OK"
-            self.last_output = "Operação cancelada pelo usuário."
-            self.screen = "report"
-            return
-        try:
-            idx = int(sel) - 1
-            target = hosts[idx]
-        except Exception:
-            self.last_status = "ERRO"
-            self.last_output = "Seleção inválida." 
-            self.screen = "report"
-            return
-
-        self.send_code_to_host(target)
+        self.last_status = "OK"
+        self.last_output = "Dispositivos detectados na rede local:\n" + "\n".join(f"- {host}" for host in hosts)
+        self.screen = "report"
 
     def send_code_to_host(self, host: str) -> None:
         """Send code to a host. Supports SSH (if available) or PowerShell remoting (Invoke-Command).
