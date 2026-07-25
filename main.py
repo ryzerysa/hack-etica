@@ -345,9 +345,15 @@ class AuditArcadeUI:
                 self.screen = "menu"
         elif self.screen == "usb_input":
             if termios is None or os.name == "nt":
-                self.usb_code = key
-                self.run_usb_code(self.usb_code)
-                self.screen = "report"
+                # On Windows or when termios is not available, input() returns a full line.
+                k = key.strip()
+                # Allow user to press B (or b) to exit USB input mode without executing.
+                if k.lower() in {"b", "back", "esc"}:
+                    self.screen = "menu"
+                else:
+                    self.usb_code = key
+                    self.run_usb_code(self.usb_code)
+                    self.screen = "report"
             else:
                 if key in {"b", "back", "esc"}:
                     self.screen = "menu"
@@ -459,6 +465,50 @@ class AuditArcadeUI:
             self.last_status = "ERRO"
             self.last_output += f"\nFalha ao gravar no USB: {e}"
 
+    def has_adb_device(self) -> bool:
+        try:
+            proc = subprocess.run(["adb", "devices"], capture_output=True, text=True, timeout=5)
+            lines = proc.stdout.splitlines()
+            # lines[0] is header, devices appear after
+            for l in lines[1:]:
+                if not l.strip():
+                    continue
+                parts = l.split()
+                if len(parts) >= 2 and parts[1] == "device":
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def run_on_adb_device(self, local_path: str, filename: str) -> None:
+        # Try a few common remote locations and python binaries
+        remote_candidates = [f"/data/local/tmp/{filename}", f"/sdcard/{filename}"]
+        python_bins = ["python3", "python"]
+        try:
+            for remote in remote_candidates:
+                try:
+                    ppush = subprocess.run(["adb", "push", local_path, remote], capture_output=True, text=True, timeout=20)
+                except Exception as e:
+                    self.last_output += f"\nFalha ao enviar via adb: {e}"
+                    continue
+                self.last_output += f"\nadb push: {ppush.stdout}{ppush.stderr}"
+                for py in python_bins:
+                    try:
+                        prun = subprocess.run(["adb", "shell", py, remote], capture_output=True, text=True, timeout=30)
+                    except Exception as e:
+                        self.last_output += f"\nFalha ao executar via adb ({py}): {e}"
+                        continue
+                    self.last_output += f"\nExecução adb ({py}) stdout:\n{prun.stdout}\nstderr:\n{prun.stderr}"
+                    if prun.returncode == 0:
+                        self.last_status = "OK"
+                        return
+            # if we reach here, execution failed
+            self.last_status = "ERRO"
+            self.last_output += "\nNão foi possível executar o script via ADB no dispositivo conectado."
+        except Exception as e:
+            self.last_status = "ERRO"
+            self.last_output += f"\nErro inesperado ao tentar executar via ADB: {e}"
+
     def run_usb_audit(self) -> None:
         self.last_command = "USB audit / Python"
         self.message = "Modo de edição USB (multilinha). Digite linhas; quando terminar, digite .run em nova linha."
@@ -494,18 +544,38 @@ class AuditArcadeUI:
 
         self.last_command = "USB code execution"
         self.message = "Executando código Python e exportando para USB"
+        # First execute locally
         self.run_python_code(code)
+
+        # Write payload to local temp file so we can push to adb if needed
+        filename = f"usb_payload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py"
+        local_tmp = os.path.join(os.getcwd(), filename)
+        try:
+            with open(local_tmp, "w", encoding="utf-8") as f:
+                f.write(f"# Script gerado pelo AuditArcadeUI para USB\n{code}\n")
+        except Exception as e:
+            self.last_output += f"\nFalha ao gravar arquivo temporário: {e}"
+
+        # If adb device present, try push+run there
+        if self.has_adb_device():
+            self.last_output += "\nDispositivo ADB detectado — tentando enviar e executar no dispositivo."
+            self.run_on_adb_device(local_tmp, filename)
+            # keep a copy locally as well
+
         usb_mount = self.find_usb_mount()
         if usb_mount:
-            payload = f"# Script gerado pelo AuditArcadeUI para USB\n{code}\n"
-            filename = f"usb_payload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py"
-            self.write_to_usb(usb_mount, filename, payload)
-            if self.last_status == "OK":
-                self.message = "Código Python executado e arquivo salvo no USB"
+            try:
+                payload = f"# Script gerado pelo AuditArcadeUI para USB\n{code}\n"
+                self.write_to_usb(usb_mount, filename, payload)
+                if self.last_status == "OK":
+                    self.message = "Código Python executado e arquivo salvo no USB"
+            except Exception as e:
+                self.last_output += f"\nFalha ao gravar no USB: {e}"
         else:
             self.last_output += "\nNenhum dispositivo USB de armazenamento encontrado."
-            self.last_status = "ERRO"
-            self.message = "USB não encontrado"
+            if not self.has_adb_device():
+                self.last_status = "ERRO"
+                self.message = "USB/ADB não encontrado"
 
     def run_python_code(self, code: str) -> None:
         self.last_command = f"python -c {code}"
@@ -800,3 +870,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
