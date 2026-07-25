@@ -623,9 +623,9 @@ class AuditArcadeUI:
 
     def run_usb_audit(self) -> None:
         self.last_command = "USB audit / Python"
-        self.message = "Modo de edição USB (multilinha). Digite linhas; quando terminar, digite .run em nova linha."
+        self.message = "Modo USB/ADB: use .pull /caminho/arquivo.py para buscar do Termux e executar no PC."
         lines: list[str] = []
-        print("\nEntrando no modo multilinha para USB. Digite seu código. Terminar com uma linha contendo only: .run")
+        print("\nEntrando no modo multilinha para USB/ADB. Digite seu código ou use .pull /caminho/arquivo.py para puxar do dispositivo Android.")
         while True:
             try:
                 line = input()
@@ -643,11 +643,12 @@ class AuditArcadeUI:
 
         code = "\n".join(lines)
         self.usb_code = code
-        # Special command: .pull will fetch the latest .py from connected device and run locally
-        if code.strip() == ".pull":
+        # Special command: .pull will fetch a .py from the connected device and run locally
+        if code.strip().startswith(".pull"):
             if self.has_adb_device():
                 self.last_output = "Tentando buscar e executar script do dispositivo via ADB..."
-                self.pull_and_run_from_device()
+                path = code.strip()[len(".pull"):].strip()
+                self.pull_and_run_from_device(path if path else None)
             else:
                 self.last_status = "ERRO"
                 self.last_output = "Nenhum dispositivo ADB conectado."
@@ -658,78 +659,77 @@ class AuditArcadeUI:
         self.run_usb_code(code)
         self.screen = "report"
 
-    def pull_and_run_from_device(self) -> None:
-        # Attempts to find the most recent .py file in common locations on the device,
-        # pulls it (or streams it) and executes locally.
-        candidates = ["/sdcard", "/sdcard/Download", "/data/local/tmp", "/storage"]
-        found = None
+    def pull_and_run_from_device(self, requested_path: str | None = None) -> None:
+        # Attempts to pull a specified file from device, or find a .py file in common locations.
+        candidates = [
+            "/data/data/com.termux/files/home",
+            "/data/data/com.termux/files/home/storage/shared",
+            "/data/data/com.termux/files/home/storage/shared/Download",
+            "/sdcard",
+            "/sdcard/Download",
+            "/storage/emulated/0",
+            "/data/local/tmp",
+        ]
+        found = requested_path
         try:
-            # Ensure adb server
             try:
                 subprocess.run(["adb", "start-server"], capture_output=True, text=True, timeout=5)
             except Exception:
                 pass
 
-            for base in candidates:
-                # Use shell pipeline to pick newest .py (best-effort)
-                cmd = f"adb shell ls -t {base}/*.py 2>/dev/null | head -n1"
-                proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
-                out = proc.stdout.strip()
-                if out:
-                    # adb shell may prefix with /sdcard/; accept the path
-                    found = out.splitlines()[0].strip()
-                    break
+            if not found:
+                for base in candidates:
+                    cmd = f"ls -t {base}/*.py 2>/dev/null"
+                    proc = subprocess.run(["adb", "shell", cmd], capture_output=True, text=True, timeout=10)
+                    if proc.returncode != 0:
+                        continue
+                    out = proc.stdout.strip().replace('\r', '')
+                    if out:
+                        found = out.splitlines()[0].strip()
+                        break
 
             if not found:
                 self.last_status = "ERRO"
-                self.last_output += "\nNenhum arquivo .py encontrado nas pastas usuais do dispositivo."
+                self.last_output += "\nNenhum arquivo .py encontrado nas pastas usuais do dispositivo. Use .pull /caminho/arquivo.py para especificar." 
                 return
 
             self.last_output += f"\nArquivo encontrado no dispositivo: {found}"
 
-            # Try to stream via exec-out
-            try:
-                cmd2 = f"adb exec-out cat '{found}'"
-                proc2 = subprocess.run(cmd2, shell=True, capture_output=True, timeout=20)
-                if proc2.returncode == 0 and proc2.stdout:
-                    # write to temp and execute locally
-                    tf = tempfile.NamedTemporaryFile(delete=False, suffix=".py")
-                    local_tmp = tf.name
-                    tf.write(proc2.stdout)
-                    tf.close()
+            proc2 = subprocess.run(["adb", "exec-out", "cat", found], capture_output=True, timeout=20)
+            if proc2.returncode == 0 and proc2.stdout:
+                tf = tempfile.NamedTemporaryFile(delete=False, suffix=".py")
+                local_tmp = tf.name
+                tf.write(proc2.stdout)
+                tf.close()
+                try:
+                    self.last_output += "\nExecutando script trazido do dispositivo localmente..."
+                    pr = subprocess.run([sys.executable, local_tmp], capture_output=True, text=True, timeout=60)
+                    self.last_output += f"\nstdout:\n{pr.stdout}\nstderr:\n{pr.stderr}"
+                    self.last_status = "OK" if pr.returncode == 0 else "ERRO"
+                finally:
                     try:
-                        self.last_output += "\nExecutando script trazido do dispositivo localmente..."
-                        pr = subprocess.run([sys.executable, local_tmp], capture_output=True, text=True, timeout=60)
-                        self.last_output += f"\nstdout:\n{pr.stdout}\nstderr:\n{pr.stderr}"
-                        self.last_status = "OK" if pr.returncode == 0 else "ERRO"
-                    finally:
-                        try:
-                            os.remove(local_tmp)
-                        except Exception:
-                            pass
-                    return
-            except Exception as e:
-                self.last_output += f"\nFalha ao executar adb exec-out: {e}"
+                        os.remove(local_tmp)
+                    except Exception:
+                        pass
+                return
 
-            # Fallback: adb pull to temp
-            try:
-                local_tmp = os.path.join(os.getcwd(), os.path.basename(found))
-                ppull = subprocess.run(["adb", "pull", found, local_tmp], capture_output=True, text=True, timeout=20)
-                self.last_output += f"\nadb pull: stdout:\n{ppull.stdout}\nstderr:\n{ppull.stderr}"
-                if ppull.returncode == 0 and os.path.exists(local_tmp):
+            self.last_output += f"\nadb exec-out falhou ou não retornou dados. stderr:\n{proc2.stderr.decode(errors='ignore') if isinstance(proc2.stderr, bytes) else proc2.stderr}"
+
+            local_tmp = os.path.join(os.getcwd(), os.path.basename(found))
+            ppull = subprocess.run(["adb", "pull", found, local_tmp], capture_output=True, text=True, timeout=20)
+            self.last_output += f"\nadb pull: stdout:\n{ppull.stdout}\nstderr:\n{ppull.stderr}"
+            if ppull.returncode == 0 and os.path.exists(local_tmp):
+                try:
+                    self.last_output += "\nExecutando arquivo puxado do dispositivo localmente..."
+                    pr = subprocess.run([sys.executable, local_tmp], capture_output=True, text=True, timeout=60)
+                    self.last_output += f"\nstdout:\n{pr.stdout}\nstderr:\n{pr.stderr}"
+                    self.last_status = "OK" if pr.returncode == 0 else "ERRO"
+                finally:
                     try:
-                        self.last_output += "\nExecutando arquivo puxado do dispositivo localmente..."
-                        pr = subprocess.run([sys.executable, local_tmp], capture_output=True, text=True, timeout=60)
-                        self.last_output += f"\nstdout:\n{pr.stdout}\nstderr:\n{pr.stderr}"
-                        self.last_status = "OK" if pr.returncode == 0 else "ERRO"
-                    finally:
-                        try:
-                            os.remove(local_tmp)
-                        except Exception:
-                            pass
-                    return
-            except Exception as e:
-                self.last_output += f"\nFalha ao puxar/rodar o arquivo: {e}"
+                        os.remove(local_tmp)
+                    except Exception:
+                        pass
+                return
 
             self.last_status = "ERRO"
             self.last_output += "\nNão foi possível recuperar e executar o script do dispositivo."
@@ -1081,3 +1081,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
