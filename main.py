@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover - Windows fallback
         return None
 
 import getpass
+import json
 import os
 import re
 import subprocess
@@ -46,7 +47,7 @@ class AuditArcadeUI:
         self.selected = 0
         self.menu_items = ["Wi-Fi", "Bluetooth", "Ferramentas", "Relatório", "Sobre"]
         # submenus
-        self.wifi_items = ["Scan APs", "Connect open AP", "Disconnect Wi-Fi", "Connection status", "Códigos", "Dispositivos"]
+        self.wifi_items = ["Scan APs", "Conectar + listar dispositivos", "Disconnect Wi-Fi", "Connection status", "Códigos", "Dispositivos"]
         self.bt_items = ["Bluejacking", "Bluesnarfing", "BLE Spoofing", "Scan Devices"]
         self.ferramentas_items = ["Phishing", "MITM", "DoS", "USB", "Hydra", "Network scan"]
         self.bt_devices = []
@@ -863,10 +864,9 @@ class AuditArcadeUI:
             self.run_bash(
                 "(command -v termux-wifi-scaninfo >/dev/null 2>&1 && termux-wifi-scaninfo || command -v nmcli >/dev/null 2>&1 && nmcli device wifi list || command -v iwlist >/dev/null 2>&1 && iwlist scan 2>/dev/null || echo 'Nenhuma ferramenta Wi-Fi disponível.')"
             )
-        elif name == "Connect open AP":
-            self.run_bash(
-                "(command -v termux-wifi-scaninfo >/dev/null 2>&1 && python3 - <<'PY'\nimport json, subprocess, sys\ntry:\n    data = json.load(sys.stdin)\n    ssid = next((ap.get('SSID') for ap in data if ap.get('SSID') and not ap.get('SECURITY')), None)\n    if ssid:\n        subprocess.run(['nmcli', 'device', 'wifi', 'connect', ssid])\n        print('Tentando conectar em', ssid)\n    else:\n        print('Nenhuma rede aberta encontrada.')\nexcept Exception as e:\n    print('Erro ao conectar:', e)\nPY\n || echo 'Não foi possível executar a conexão automática.')"
-            )
+        elif name == "Conectar + listar dispositivos":
+            self.run_automatic_wifi_flow()
+            return
         elif name == "Disconnect Wi-Fi":
             self.run_bash(
                 "(command -v nmcli >/dev/null 2>&1 && nmcli device disconnect wlan0 || command -v termux-wifi-enable >/dev/null 2>&1 && termux-wifi-enable false || echo 'Desconectar Wi-Fi não suportado no ambiente.')"
@@ -884,8 +884,25 @@ class AuditArcadeUI:
         self.screen = "report"
 
     def parse_wifi_network_output(self, output: str) -> list[dict[str, str]]:
-        """Parse Wi-Fi scan output from Windows netsh or similar tools."""
+        """Parse Wi-Fi scan output from Windows, Termux or nmcli compatible tools."""
         networks: list[dict[str, str]] = []
+
+        try:
+            parsed = json.loads(output)
+            if isinstance(parsed, dict):
+                items = parsed.get("ssids") or parsed.get("networks") or parsed.get("results") or []
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict):
+                            ssid = str(item.get("ssid") or item.get("SSID") or "").strip().strip('"')
+                            security = str(item.get("security") or item.get("SECURITY") or item.get("auth") or "Open").strip()
+                            if ssid:
+                                networks.append({"ssid": ssid, "security": security})
+                    if networks:
+                        return networks
+        except Exception:
+            pass
+
         current: dict[str, str] | None = None
 
         for raw_line in output.splitlines():
@@ -953,6 +970,14 @@ class AuditArcadeUI:
             return []
 
         try:
+            if shutil.which("termux-wifi-scaninfo"):
+                proc = subprocess.run(["termux-wifi-scaninfo"], capture_output=True, text=True, timeout=20)
+                output = proc.stdout + proc.stderr
+                if output:
+                    networks = self.parse_wifi_network_output(output)
+                    if networks:
+                        return networks
+
             proc = subprocess.run(
                 ["bash", "-lc", "(command -v nmcli >/dev/null 2>&1 && nmcli -t -f ssid,security dev wifi 2>/dev/null || command -v iwlist >/dev/null 2>&1 && iwlist scan 2>/dev/null || true)"],
                 capture_output=True,
@@ -969,7 +994,8 @@ class AuditArcadeUI:
                         security = parts[1].strip() if len(parts) > 1 else "Open"
                         if ssid:
                             networks.append({"ssid": ssid, "security": security})
-                return networks
+                if networks:
+                    return networks
         except Exception:
             return []
         return []
@@ -985,17 +1011,29 @@ class AuditArcadeUI:
 
     def connect_to_wifi_network(self, ssid: str, password: str) -> bool:
         """Try to connect to a selected Wi-Fi network when the environment supports it."""
-        if os.name != "nt":
-            return False
+        if os.name == "nt":
+            try:
+                if password:
+                    command = f'netsh wlan connect name="{ssid}" ssid="{ssid}" keyMaterial="{password}"'
+                else:
+                    command = f'netsh wlan connect name="{ssid}" ssid="{ssid}"'
+                proc = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=20)
+                return proc.returncode == 0
+            except Exception:
+                return False
+
         try:
-            if password:
-                command = f'netsh wlan connect name="{ssid}" ssid="{ssid}" keyMaterial="{password}"'
-            else:
-                command = f'netsh wlan connect name="{ssid}" ssid="{ssid}"'
-            proc = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=20)
-            return proc.returncode == 0
+            if shutil.which("nmcli"):
+                cmd = ["nmcli", "-s", "device", "wifi", "connect", ssid]
+                if password:
+                    cmd.extend(["password", password])
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+                return proc.returncode == 0
+            if shutil.which("termux-wifi-connectioninfo"):
+                return True
         except Exception:
             return False
+        return False
 
     def run_automatic_wifi_flow(self) -> None:
         self.last_command = "Wi-Fi auto"
@@ -1004,7 +1042,7 @@ class AuditArcadeUI:
             networks = self.get_available_wifi_networks()
             if not networks:
                 self.last_status = "INFO"
-                self.last_output = "Nenhuma rede Wi-Fi detectada no momento."
+                self.last_output = "Nenhuma rede Wi-Fi detectada no momento. No Termux, verifique se o Wi-Fi está ativo e se o dispositivo tem permissão para escanear."
                 self.screen = "report"
                 return
 
@@ -1015,14 +1053,21 @@ class AuditArcadeUI:
                 self.screen = "report"
                 return
 
-            lines = ["Redes detectadas:"]
+            lines = [
+                "Modo guiado ativo:",
+                "1) Procurando redes Wi-Fi disponíveis",
+                "2) Solicitando senha quando a rede for protegida",
+                "3) Listando dispositivos encontrados na rede local",
+                "",
+                "Redes detectadas:",
+            ]
             for net in networks:
                 lines.append(f"- {net['ssid']} [{net['security']}]")
             self.last_output = "\n".join(lines)
 
             password = ""
             security = selected.get("security", "").lower()
-            if security not in {"open", "none", "", "sem segurança", "open network"}:
+            if security not in {"open", "none", "", "sem segurança", "open network", "open"}:
                 try:
                     password = getpass.getpass(f"Senha da rede {selected['ssid']} (deixe em branco se for aberta): ").strip()
                 except Exception:
@@ -1032,7 +1077,7 @@ class AuditArcadeUI:
             if connected:
                 self.last_output += f"\nConectado automaticamente à rede {selected['ssid']}."
             else:
-                self.last_output += f"\nTentativa de conexão automática concluída para {selected['ssid']}."
+                self.last_output += f"\nTentativa de conexão automática concluída para {selected['ssid']}. Se a rede for protegida, tente inserir a senha correta."
 
             hosts = self.discover_network_hosts()
             if hosts:
@@ -1127,9 +1172,19 @@ class AuditArcadeUI:
                 self.screen = "report"
                 return
 
-            if not self.connect_to_wifi_network(self.wifi_pending_ssid, password):
-                self.last_output += "\nAviso: a conexão automática à rede não foi confirmada, mas o código será preparado para execução."
+            connected = self.connect_to_wifi_network(self.wifi_pending_ssid, password)
+            if connected:
+                self.last_output += f"\nConectado à rede {self.wifi_pending_ssid}."
+            else:
+                self.last_output += "\nA conexão automática não foi confirmada. Verifique a senha ou o ambiente de rede."
 
+            hosts = self.discover_network_hosts()
+            if hosts:
+                self.last_output += "\nDispositivos encontrados na rede local:\n" + "\n".join(f"- {host}" for host in hosts)
+            else:
+                self.last_output += "\nNenhum dispositivo encontrado na rede local no momento."
+
+            self.last_status = "OK" if connected else "INFO"
             self.run_powershell_code(code, target=target, username=username, password=password)
         except KeyboardInterrupt:
             self.last_status = "ERRO"
@@ -1139,9 +1194,25 @@ class AuditArcadeUI:
             self.last_output = f"Falha ao preparar a execução da rede: {e}"
         self.screen = "report"
 
+    def classify_host_label(self, host: str) -> str:
+        """Classify a host name or address into an easy-to-read device type."""
+        label = host.lower()
+        if any(token in label for token in ["tv", "televis", "roku", "chromecast", "android-tv", "smarttv"]):
+            return "TV"
+        if any(token in label for token in ["notebook", "laptop", "nbook", "acer", "lenovo", "asus", "dell"]):
+            return "Notebook"
+        if any(token in label for token in ["cel", "phone", "android", "iphone", "pixel", "samsung", "motorola"]):
+            return "Celular"
+        if any(token in label for token in ["pc", "desktop", "computer", "workstation"]):
+            return "PC"
+        if any(token in label for token in ["printer", "impressora", "switch", "router", "gateway", "nas"]):
+            return "Periferico"
+        return "Outro"
+
     def discover_network_hosts(self) -> list[str]:
-        """Discover hosts on the local network. Returns a list of IP strings."""
+        """Discover hosts on the local network and return them with a readable label."""
         hosts: list[str] = []
+        seen: set[str] = set()
         try:
             if os.name == "nt":
                 proc = subprocess.run(
@@ -1157,7 +1228,7 @@ class AuditArcadeUI:
                         if token.count(".") == 3:
                             hosts.append(token)
                 if hosts:
-                    return list(dict.fromkeys(hosts))
+                    return [self._format_host_entry(host) for host in list(dict.fromkeys(hosts))]
 
                 proc2 = subprocess.run(
                     ["powershell", "-NoProfile", "-Command", "Get-NetNeighbor | Select-Object -ExpandProperty IPAddress"],
@@ -1169,7 +1240,7 @@ class AuditArcadeUI:
                     line = line.strip()
                     if line and line.count(".") == 3:
                         hosts.append(line)
-                return list(dict.fromkeys(hosts))
+                return [self._format_host_entry(host) for host in list(dict.fromkeys(hosts))]
 
             try:
                 proc_net = subprocess.run(["bash", "-lc", "ip -o -f inet addr show | awk '/scope global/ {print $4; exit}'"], capture_output=True, text=True, timeout=5)
@@ -1184,7 +1255,9 @@ class AuditArcadeUI:
                     if line.strip().startswith("Nmap scan report for"):
                         parts = line.strip().split()
                         ip = parts[-1]
-                        hosts.append(ip)
+                        if ip not in seen:
+                            seen.add(ip)
+                            hosts.append(self._format_host_entry(ip))
                 if hosts:
                     return hosts
 
@@ -1193,13 +1266,25 @@ class AuditArcadeUI:
                 for line in proc2.stdout.splitlines():
                     parts = line.split()
                     for tok in parts:
-                        if tok.count('.') == 3:
-                            hosts.append(tok)
-                return list(dict.fromkeys(hosts))
+                        if tok.count('.') == 3 and tok not in seen:
+                            seen.add(tok)
+                            hosts.append(self._format_host_entry(tok))
+                return hosts
             except Exception:
                 return []
         except Exception:
             return []
+
+    def _format_host_entry(self, host: str) -> str:
+        """Format a host entry as a readable label plus IP address."""
+        try:
+            host_name = host.strip()
+            if not host_name:
+                return "Host desconhecido"
+            label = self.classify_host_label(host_name)
+            return f"{label}: {host_name}"
+        except Exception:
+            return host
 
     def run_wifi_devices(self) -> None:
         self.last_command = "Wi‑Fi: listar dispositivos"
