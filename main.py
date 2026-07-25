@@ -974,6 +974,15 @@ class AuditArcadeUI:
             return []
         return []
 
+    def pick_best_wifi_network(self, networks: list[dict[str, str]]) -> dict[str, str] | None:
+        """Choose the most practical network for an automatic connection attempt."""
+        if not networks:
+            return None
+        open_candidates = [net for net in networks if net.get("security", "").lower() in {"open", "none", "", "sem segurança", "open network"}]
+        if open_candidates:
+            return open_candidates[0]
+        return networks[0]
+
     def connect_to_wifi_network(self, ssid: str, password: str) -> bool:
         """Try to connect to a selected Wi-Fi network when the environment supports it."""
         if os.name != "nt":
@@ -987,6 +996,58 @@ class AuditArcadeUI:
             return proc.returncode == 0
         except Exception:
             return False
+
+    def run_automatic_wifi_flow(self) -> None:
+        self.last_command = "Wi-Fi auto"
+        self.message = "Detectando redes e dispositivos automaticamente"
+        try:
+            networks = self.get_available_wifi_networks()
+            if not networks:
+                self.last_status = "INFO"
+                self.last_output = "Nenhuma rede Wi-Fi detectada no momento."
+                self.screen = "report"
+                return
+
+            selected = self.pick_best_wifi_network(networks)
+            if selected is None:
+                self.last_status = "INFO"
+                self.last_output = "Nenhuma rede disponível para conexão automática."
+                self.screen = "report"
+                return
+
+            lines = ["Redes detectadas:"]
+            for net in networks:
+                lines.append(f"- {net['ssid']} [{net['security']}]")
+            self.last_output = "\n".join(lines)
+
+            password = ""
+            security = selected.get("security", "").lower()
+            if security not in {"open", "none", "", "sem segurança", "open network"}:
+                try:
+                    password = getpass.getpass(f"Senha da rede {selected['ssid']} (deixe em branco se for aberta): ").strip()
+                except Exception:
+                    password = ""
+
+            connected = self.connect_to_wifi_network(selected["ssid"], password)
+            if connected:
+                self.last_output += f"\nConectado automaticamente à rede {selected['ssid']}."
+            else:
+                self.last_output += f"\nTentativa de conexão automática concluída para {selected['ssid']}."
+
+            hosts = self.discover_network_hosts()
+            if hosts:
+                self.last_output += "\nDispositivos encontrados na rede local:\n" + "\n".join(f"- {host}" for host in hosts)
+            else:
+                self.last_output += "\nNenhum dispositivo encontrado na rede local no momento."
+
+            self.last_status = "OK" if connected else "INFO"
+        except KeyboardInterrupt:
+            self.last_status = "ERRO"
+            self.last_output = "Operação cancelada pelo usuário."
+        except Exception as e:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha na execução automática do Wi-Fi: {e}"
+        self.screen = "report"
 
     def run_powershell_code(self, code: str, target: str = "", username: str = "", password: str = "") -> None:
         self.last_command = "PowerShell execution"
@@ -1016,28 +1077,8 @@ class AuditArcadeUI:
 
     def run_network_code(self) -> None:
         self.last_command = "Wi-Fi codes / network execution"
-        self.message = "Abrindo menu visual de redes Wi-Fi"
-        try:
-            networks = self.get_available_wifi_networks()
-            if not networks:
-                self.last_status = "INFO"
-                self.last_output = "Nenhuma rede Wi-Fi detectada no momento. Você pode inserir o SSID manualmente."
-                self.wifi_networks = [{"ssid": "Inserir rede manualmente", "security": "manual"}]
-                self.wifi_network_selected = 0
-                self.screen = "wifi_network_menu"
-                return
-
-            self.wifi_networks = networks + [{"ssid": "Inserir rede manualmente", "security": "manual"}]
-            self.wifi_network_selected = 0
-            self.screen = "wifi_network_menu"
-        except KeyboardInterrupt:
-            self.last_status = "ERRO"
-            self.last_output = "Operação cancelada pelo usuário."
-            self.screen = "report"
-        except Exception as e:
-            self.last_status = "ERRO"
-            self.last_output = f"Falha na execução de código de rede: {e}"
-            self.screen = "report"
+        self.message = "Executando fluxo automático de Wi-Fi"
+        self.run_automatic_wifi_flow()
 
     def select_wifi_network(self) -> None:
         if not self.wifi_networks:
