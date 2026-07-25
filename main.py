@@ -860,22 +860,42 @@ class AuditArcadeUI:
         self.screen = "report"
 
     def parse_wifi_network_output(self, output: str) -> list[dict[str, str]]:
-        """Parse simple Wi-Fi scan output from Windows netsh or similar tools."""
+        """Parse Wi-Fi scan output from Windows netsh or similar tools."""
         networks: list[dict[str, str]] = []
         current: dict[str, str] | None = None
+
         for raw_line in output.splitlines():
             line = raw_line.strip()
             if not line:
                 continue
-            ssid_match = re.search(r"SSID\s+\d+\s*:\s*(.+)", line)
+
+            ssid_match = re.search(r"(?i)\bssid\b(?:\s+\d+)?\s*[:=]\s*(.+)", line)
             if ssid_match:
                 ssid = ssid_match.group(1).strip().strip('"')
-                current = {"ssid": ssid, "security": "Open"}
-                networks.append(current)
+                if ssid:
+                    current = {"ssid": ssid, "security": "Open"}
+                    networks.append(current)
                 continue
-            auth_match = re.search(r"Authentication\s*:\s*(.+)", line, re.IGNORECASE)
-            if current and auth_match:
-                current["security"] = auth_match.group(1).strip()
+
+            if current:
+                auth_match = re.search(r"(?i)(?:authentication|autenticação)\s*[:=]\s*(.+)", line)
+                if auth_match:
+                    current["security"] = auth_match.group(1).strip()
+                    continue
+                crypt_match = re.search(r"(?i)(?:encryption|criptografia)\s*[:=]\s*(.+)", line)
+                if crypt_match:
+                    current["security"] = current["security"] if current["security"] != "Open" else crypt_match.group(1).strip()
+
+        if not networks:
+            for line in output.splitlines():
+                stripped = line.strip()
+                if stripped.lower().startswith("ssid") or stripped.lower().startswith("nome da rede"):
+                    parts = stripped.split(":", 1)
+                    if len(parts) > 1:
+                        ssid = parts[1].strip().strip('"')
+                        if ssid:
+                            networks.append({"ssid": ssid, "security": "Open"})
+
         return networks
 
     def get_available_wifi_networks(self) -> list[dict[str, str]]:
@@ -888,9 +908,25 @@ class AuditArcadeUI:
                     text=True,
                     timeout=20,
                 )
-                return self.parse_wifi_network_output(proc.stdout + proc.stderr)
+                networks = self.parse_wifi_network_output(proc.stdout + proc.stderr)
+                if networks:
+                    return networks
             except Exception:
-                return []
+                pass
+
+            try:
+                proc = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "netsh wlan show interfaces"],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                if "redes visíveis" in proc.stdout.lower() or "networks" in proc.stdout.lower():
+                    return [{"ssid": "Rede visível", "security": "Detectada pelo sistema"}]
+            except Exception:
+                pass
+
+            return []
 
         try:
             proc = subprocess.run(
