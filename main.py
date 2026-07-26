@@ -47,7 +47,7 @@ class AuditArcadeUI:
         self.selected = 0
         self.menu_items = ["Wi-Fi", "Bluetooth", "Ferramentas", "Relatório", "Sobre"]
         # submenus
-        self.wifi_items = ["Scan APs", "Conectar + listar dispositivos", "Disconnect Wi-Fi", "Connection status", "Códigos", "Dispositivos"]
+        self.wifi_items = ["Scan APs", "Conectar + listar dispositivos", "Permitir escaneamento", "Disconnect Wi-Fi", "Connection status", "Códigos", "Dispositivos"]
         self.bt_items = ["Bluejacking", "Bluesnarfing", "BLE Spoofing", "Scan Devices"]
         self.ferramentas_items = ["Phishing", "MITM", "DoS", "USB", "Hydra", "Network scan"]
         self.bt_devices = []
@@ -64,6 +64,7 @@ class AuditArcadeUI:
         self.wifi_pending_code = ""
         self.bt_selected = 0
         self.ferramentas_selected = 0
+        self.wifi_permission_message = ""
         self.last_status = "Pronto"
         self.last_output = "Selecione um módulo para iniciar uma análise autorizada."
         self.last_command = ""
@@ -867,6 +868,11 @@ class AuditArcadeUI:
         elif name == "Conectar + listar dispositivos":
             self.run_automatic_wifi_flow()
             return
+        elif name == "Permitir escaneamento":
+            self.last_output = self.request_wifi_scan_permission()
+            self.last_status = "INFO"
+            self.screen = "report"
+            return
         elif name == "Disconnect Wi-Fi":
             self.run_bash(
                 "(command -v nmcli >/dev/null 2>&1 && nmcli device disconnect wlan0 || command -v termux-wifi-enable >/dev/null 2>&1 && termux-wifi-enable false || echo 'Desconectar Wi-Fi não suportado no ambiente.')"
@@ -939,8 +945,37 @@ class AuditArcadeUI:
 
         return networks
 
+    def is_wifi_permission_error(self, output: str) -> bool:
+        """Detect common permission-related scan errors for Android/Termux."""
+        text = (output or "").lower()
+        if not text:
+            return False
+        if any(token in text for token in ["no networks found", "nenhuma rede", "nenhuma rede encontrada", "no wifi networks"]):
+            return False
+        return any(token in text for token in ["permission denied", "permission", "location permission", "location services", "needs location", "requires location", "access denied", "denied", "não tem permissão", "permissão de localização"])
+
+    def request_wifi_scan_permission(self) -> str:
+        """Help the user grant location permission for Wi-Fi scanning in Android/Termux."""
+        if os.name == "nt":
+            return "No Windows a permissão é tratada pelo sistema. Se o scan não carregar, verifique o adaptador Wi-Fi e o driver do dispositivo."
+
+        try:
+            if shutil.which("am"):
+                cmd = ["am", "start", "-a", "android.settings.APPLICATION_DETAILS_SETTINGS", "-d", "package:com.termux"]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+                output = (proc.stdout + proc.stderr).strip()
+                if proc.returncode == 0:
+                    return "A tela de permissões do Termux foi aberta. Ative a permissão de localização e depois tente escanear novamente."
+                if output:
+                    return f"Tente abrir as permissões do Termux manualmente. Detalhes: {output}"
+        except Exception as exc:
+            return f"Não foi possível abrir a tela de permissões automaticamente: {exc}"
+
+        return "Conceda a permissão de localização para o Termux nas Configurações do Android e depois tente escanear novamente."
+
     def get_available_wifi_networks(self) -> list[dict[str, str]]:
         """List available Wi-Fi networks using the best available tool."""
+        self.wifi_permission_message = ""
         if os.name == "nt":
             try:
                 proc = subprocess.run(
@@ -974,6 +1009,9 @@ class AuditArcadeUI:
                 proc = subprocess.run(["termux-wifi-scaninfo"], capture_output=True, text=True, timeout=20)
                 output = proc.stdout + proc.stderr
                 if output:
+                    if self.is_wifi_permission_error(output):
+                        self.wifi_permission_message = output
+                        return []
                     networks = self.parse_wifi_network_output(output)
                     if networks:
                         return networks
@@ -986,6 +1024,9 @@ class AuditArcadeUI:
             )
             output = proc.stdout + proc.stderr
             if output:
+                if self.is_wifi_permission_error(output):
+                    self.wifi_permission_message = output
+                    return []
                 networks = []
                 for line in output.splitlines():
                     if ":" in line and not line.startswith("BSSID"):
@@ -1042,7 +1083,11 @@ class AuditArcadeUI:
             networks = self.get_available_wifi_networks()
             if not networks:
                 self.last_status = "INFO"
-                self.last_output = "Nenhuma rede Wi-Fi detectada no momento. No Termux, verifique se o Wi-Fi está ativo e se o dispositivo tem permissão para escanear."
+                if self.wifi_permission_message:
+                    guidance = self.request_wifi_scan_permission()
+                    self.last_output = f"Escaneamento bloqueado por permissão.\n{self.wifi_permission_message}\n\n{guidance}"
+                else:
+                    self.last_output = "Nenhuma rede Wi-Fi detectada no momento. No Termux, verifique se o Wi-Fi está ativo, se a rede está visível e se o app tem permissão de localização."
                 self.screen = "report"
                 return
 
