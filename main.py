@@ -206,50 +206,40 @@ class AuditArcadeUI:
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
             ),
             "Phishing": (
-                "  ██████   \n"
-                " █      █  \n"
-                " █  ██  █  \n"
-                " █  ██  █  \n"
-                " █      █  \n"
-                "  ██████   \n"
-                "    ██     \n"
+                "  ╭────────╮  \n"
+                "  │  ⚠  ──┤  \n"
+                "  │  ▓▓▓  │  \n"
+                "  ╰────────╯  \n"
+                "   ░░░  ░░░   \n"
             ),
             "MITM": (
-                "   ██  ██  \n"
-                "  █  ██  █ \n"
-                " █   ██   █\n"
-                "  █     █  \n"
-                "   █   █   \n"
-                "    █ █    \n"
-                "     █     \n"
+                "   ╭──────╮   \n"
+                "   │  ╲╱  │   \n"
+                "   │  ╱╲  │   \n"
+                "   │  ◉   │   \n"
+                "   ╰──────╯   \n"
             ),
             "DoS": (
-                "    █   █   \n"
-                "   █ █ █ █  \n"
-                "  █  █ █  █ \n"
-                "   █     █  \n"
-                "    █   █   \n"
-                "     █ █    \n"
-                "      █     \n"
+                "   ⌁⌁⌁⌁⌁   \n"
+                "  ╱╲╱╲╱╲╱╲  \n"
+                "  ╲╱╲╱╲╱╲╱  \n"
+                "   ⌁⌁⌁⌁⌁   \n"
             ),
             "USB": (
-                "    █████   \n"
-                "   █     █  \n"
-                "   █ USB █  \n"
-                "   █     █  \n"
-                "    █████   \n"
-                "      █     \n"
-                "      █     \n"
+                "   ╭──────╮   \n"
+                "   │  ⊕   │   \n"
+                "   │ USB  │   \n"
+                "   ╰──────╯   \n"
             ),
             "Relatório": (
-                "  █████████ \n"
-                "  █ REPORT █ \n"
-                "  █████████ \n"
+                "  ╭──────────╮ \n"
+                "  │  REPORT  │ \n"
+                "  ╰──────────╯ \n"
             ),
             "Sobre": (
-                "  █████████ \n"
-                "  █  INFO █  \n"
-                "  █████████ \n"
+                "  ╭──────────╮ \n"
+                "  │   INFO   │ \n"
+                "  ╰──────────╯ \n"
             ),
         }
 
@@ -883,8 +873,11 @@ class AuditArcadeUI:
         self.screen = "report"
 
     def parse_wifi_network_output(self, output: str) -> list[dict[str, str]]:
-        """Parse Wi-Fi scan output from Windows, Termux or nmcli compatible tools."""
+        """Parse Wi-Fi scan output from Windows, Termux, nmcli or iwlist compatible tools."""
         networks: list[dict[str, str]] = []
+
+        if not output:
+            return networks
 
         try:
             parsed = json.loads(output)
@@ -903,13 +896,14 @@ class AuditArcadeUI:
             pass
 
         current: dict[str, str] | None = None
+        metadata_labels = {"authentication", "autenticação", "encryption", "criptografia", "cipher", "segurança", "network type", "network", "type", "bssid", "quality", "signal", "channel", "frequency", "address", "status", "radio type", "band", "rates", "beacon"}
 
         for raw_line in output.splitlines():
             line = raw_line.strip()
             if not line:
                 continue
 
-            ssid_match = re.search(r"(?i)\bssid\b(?:\s+\d+)?\s*[:=]\s*(.+)", line)
+            ssid_match = re.search(r"(?i)\b(?:ssid|essid)\b(?:\s+\d+)?\s*[:=]\s*(.+)", line)
             if ssid_match:
                 ssid = ssid_match.group(1).strip().strip('"')
                 if ssid:
@@ -918,18 +912,33 @@ class AuditArcadeUI:
                 continue
 
             if current:
-                auth_match = re.search(r"(?i)(?:authentication|autenticação)\s*[:=]\s*(.+)", line)
+                auth_match = re.search(r"(?i)(?:authentication|autenticação|auth)\s*[:=]\s*(.+)", line)
                 if auth_match:
                     current["security"] = auth_match.group(1).strip()
                     continue
-                crypt_match = re.search(r"(?i)(?:encryption|criptografia)\s*[:=]\s*(.+)", line)
+                crypt_match = re.search(r"(?i)(?:encryption|criptografia|cipher|segurança)\s*[:=]\s*(.+)", line)
                 if crypt_match:
-                    current["security"] = current["security"] if current["security"] != "Open" else crypt_match.group(1).strip()
+                    security = crypt_match.group(1).strip()
+                    if security.lower() in {"none", "open", ""}:
+                        current["security"] = "Open"
+                    else:
+                        current["security"] = current["security"] if current["security"] != "Open" else security
+                    continue
+
+            if ":" in line and not line.startswith("WLAN"):
+                key, value = line.split(":", 1)
+                key = key.strip().lower()
+                value = value.strip()
+                if key not in metadata_labels and " " not in key and re.search(r"(?i)\b(wpa2|wpa|wep|open|none|personal|enterprise|psk)\b", value):
+                    ssid = line.split(":", 1)[0].strip().strip('"')
+                    if ssid:
+                        current = {"ssid": ssid, "security": value.strip('"')}
+                        networks.append(current)
 
         if not networks:
             for line in output.splitlines():
                 stripped = line.strip()
-                if stripped.lower().startswith("ssid") or stripped.lower().startswith("nome da rede"):
+                if stripped.lower().startswith("ssid") or stripped.lower().startswith("nome da rede") or stripped.lower().startswith("essid"):
                     parts = stripped.split(":", 1)
                     if len(parts) > 1:
                         ssid = parts[1].strip().strip('"')
@@ -939,13 +948,19 @@ class AuditArcadeUI:
         return networks
 
     def is_wifi_permission_error(self, output: str) -> bool:
-        """Detect common permission-related scan errors for Android/Termux."""
+        """Detect common permission-related scan errors for Android/Termux without false positives."""
         text = (output or "").lower()
         if not text:
             return False
-        if any(token in text for token in ["no networks found", "nenhuma rede", "nenhuma rede encontrada", "no wifi networks"]):
+
+        no_network_tokens = ["no networks found", "nenhuma rede", "nenhuma rede encontrada", "no wifi networks", "sem redes", "no wifi"]
+        permission_tokens = ["permission denied", "location permission", "location services", "needs location", "requires location", "access denied", "não tem permissão", "permissão de localização"]
+
+        if any(token in text for token in no_network_tokens):
             return False
-        return any(token in text for token in ["permission denied", "permission", "location permission", "location services", "needs location", "requires location", "access denied", "denied", "não tem permissão", "permissão de localização"])
+        if any(token in text for token in permission_tokens):
+            return True
+        return "permission" in text and "denied" in text
 
     def request_wifi_scan_permission(self) -> str:
         """Attempt to enable Wi-Fi scan-related permissions automatically on Android/Termux when possible."""
@@ -972,39 +987,52 @@ class AuditArcadeUI:
         return "Conceda a permissão de localização para o Termux nas Configurações do Android e depois tente escanear novamente."
 
     def get_available_wifi_networks(self) -> list[dict[str, str]]:
-        """List available Wi-Fi networks using the best available tool."""
+        """List available Wi-Fi networks using the best available tool for the current environment."""
         self.wifi_permission_message = ""
         if os.name == "nt":
-            try:
-                proc = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", "netsh wlan show networks"],
-                    capture_output=True,
-                    text=True,
-                    timeout=20,
-                )
-                networks = self.parse_wifi_network_output(proc.stdout + proc.stderr)
-                if networks:
-                    return networks
-            except Exception:
-                pass
-
-            try:
-                proc = subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", "netsh wlan show interfaces"],
-                    capture_output=True,
-                    text=True,
-                    timeout=20,
-                )
-                if "redes visíveis" in proc.stdout.lower() or "networks" in proc.stdout.lower():
-                    return [{"ssid": "Rede visível", "security": "Detectada pelo sistema"}]
-            except Exception:
-                pass
-
+            candidates = [
+                ["powershell", "-NoProfile", "-Command", "netsh wlan show networks mode=Bssid"],
+                ["powershell", "-NoProfile", "-Command", "netsh wlan show interfaces"],
+            ]
+            for command in candidates:
+                try:
+                    proc = subprocess.run(command, capture_output=True, text=True, timeout=20)
+                    output = proc.stdout + proc.stderr
+                    if output:
+                        networks = self.parse_wifi_network_output(output)
+                        if networks:
+                            return networks
+                        if "network" in output.lower() or "redes" in output.lower():
+                            return [{"ssid": "Rede visível", "security": "Detectada pelo sistema"}]
+                except Exception:
+                    continue
             return []
 
         try:
             if shutil.which("termux-wifi-scaninfo"):
                 proc = subprocess.run(["termux-wifi-scaninfo"], capture_output=True, text=True, timeout=20)
+                output = proc.stdout + proc.stderr
+                if output:
+                    if self.is_wifi_permission_error(output):
+                        self.wifi_permission_message = output
+                        return []
+                    networks = self.parse_wifi_network_output(output)
+                    if networks:
+                        return networks
+
+            if shutil.which("nmcli"):
+                proc = subprocess.run(["nmcli", "-t", "-f", "ssid,security", "dev", "wifi"], capture_output=True, text=True, timeout=20)
+                output = proc.stdout + proc.stderr
+                if output:
+                    if self.is_wifi_permission_error(output):
+                        self.wifi_permission_message = output
+                        return []
+                    networks = self.parse_wifi_network_output(output)
+                    if networks:
+                        return networks
+
+            if shutil.which("iwlist"):
+                proc = subprocess.run(["iwlist", "scan"], capture_output=True, text=True, timeout=20)
                 output = proc.stdout + proc.stderr
                 if output:
                     if self.is_wifi_permission_error(output):
@@ -1025,14 +1053,7 @@ class AuditArcadeUI:
                 if self.is_wifi_permission_error(output):
                     self.wifi_permission_message = output
                     return []
-                networks = []
-                for line in output.splitlines():
-                    if ":" in line and not line.startswith("BSSID"):
-                        parts = line.split(":", 1)
-                        ssid = parts[0].strip().strip('"')
-                        security = parts[1].strip() if len(parts) > 1 else "Open"
-                        if ssid:
-                            networks.append({"ssid": ssid, "security": security})
+                networks = self.parse_wifi_network_output(output)
                 if networks:
                     return networks
         except Exception:
@@ -1050,6 +1071,9 @@ class AuditArcadeUI:
 
     def connect_to_wifi_network(self, ssid: str, password: str) -> bool:
         """Try to connect to a selected Wi-Fi network when the environment supports it."""
+        if not ssid:
+            return False
+
         if os.name == "nt":
             try:
                 if password:
@@ -1057,7 +1081,10 @@ class AuditArcadeUI:
                 else:
                     command = f'netsh wlan connect name="{ssid}" ssid="{ssid}"'
                 proc = subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True, text=True, timeout=20)
-                return proc.returncode == 0
+                output = (proc.stdout + proc.stderr).lower()
+                if proc.returncode == 0 or "successfully" in output or "connected" in output:
+                    return True
+                return False
             except Exception:
                 return False
 
@@ -1067,7 +1094,9 @@ class AuditArcadeUI:
                 if password:
                     cmd.extend(["password", password])
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
-                return proc.returncode == 0
+                output = (proc.stdout + proc.stderr).lower()
+                if proc.returncode == 0 or "successfully" in output or "connected" in output or "already" in output:
+                    return True
             if shutil.which("termux-wifi-connectioninfo"):
                 return True
         except Exception:
@@ -1482,6 +1511,20 @@ class AuditArcadeUI:
         except Exception:
             return text.upper()
 
+    def render_menu_label(self, text: str, selected: bool = False) -> str:
+        """Render a menu label using a more stylized block format for the selected entry."""
+        if not text:
+            return ""
+        if not selected:
+            return text
+
+        label = text.upper()
+        width = max(8, len(label) + 4)
+        top = "╔" + "═" * width + "╗"
+        mid = "║ " + label.center(width - 2) + " ║"
+        bottom = "╚" + "═" * width + "╝"
+        return f"{top}\n{mid}\n{bottom}"
+
     def run_ferramentas_tool(self, name: str) -> None:
         self.last_command = f"Ferramentas tool: {name}"
         if name == "Phishing":
@@ -1704,7 +1747,8 @@ class AuditArcadeUI:
         table.add_column("Opção", style="bold white")
         for idx, item in enumerate(self.menu_items):
             style = "bold black on white" if idx == self.selected else "white"
-            table.add_row(f"> {item}" if idx == self.selected else f"  {item}", style=style)
+            label = self.render_menu_label(item, selected=idx == self.selected)
+            table.add_row(f"> {label}" if idx == self.selected else f"  {item}", style=style)
         self.console.print(table)
         self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] para selecionar\n[white]Q[/white] para sair", border_style="white"))
 
@@ -1716,8 +1760,8 @@ class AuditArcadeUI:
         table.add_column("Opção", style="bold white")
         for idx, item in enumerate(self.wifi_items):
             style = "bold black on white" if idx == self.wifi_selected else "white"
-            label = self.render_ascii_label(item)
-            table.add_row(f"> {label}" if idx == self.wifi_selected else f"  {label}", style=style)
+            label = self.render_menu_label(item, selected=idx == self.wifi_selected)
+            table.add_row(f"> {label}" if idx == self.wifi_selected else f"  {item}", style=style)
         self.console.print(table)
         self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar\n[white]Códigos[/white] abre menu visual de redes", border_style="white"))
 
@@ -1757,8 +1801,8 @@ class AuditArcadeUI:
         table.add_column("Opção", style="bold white")
         for idx, item in enumerate(self.bt_items):
             style = "bold black on white" if idx == self.bt_selected else "white"
-            label = self.render_ascii_label(item)
-            table.add_row(f"> {label}" if idx == self.bt_selected else f"  {label}", style=style)
+            label = self.render_menu_label(item, selected=idx == self.bt_selected)
+            table.add_row(f"> {label}" if idx == self.bt_selected else f"  {item}", style=style)
         self.console.print(table)
         self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar", border_style="white"))
 
@@ -1782,8 +1826,8 @@ class AuditArcadeUI:
         table.add_column("Opção", style="bold white")
         for idx, item in enumerate(self.ferramentas_items):
             style = "bold black on white" if idx == self.ferramentas_selected else "white"
-            label = self.render_ascii_label(item)
-            table.add_row(f"> {label}" if idx == self.ferramentas_selected else f"  {label}", style=style)
+            label = self.render_menu_label(item, selected=idx == self.ferramentas_selected)
+            table.add_row(f"> {label}" if idx == self.ferramentas_selected else f"  {item}", style=style)
         self.console.print(table)
         self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar", border_style="white"))
 
