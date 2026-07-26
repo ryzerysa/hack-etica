@@ -22,6 +22,8 @@ import sys
 import textwrap
 import tempfile
 import shutil
+import urllib.request
+import urllib.error
 from datetime import datetime
 from time import sleep
 
@@ -49,7 +51,7 @@ class AuditArcadeUI:
         # submenus
         self.wifi_items = ["Scan APs", "Conectar + listar dispositivos", "Permitir escaneamento", "Disconnect Wi-Fi", "Connection status", "Códigos", "Dispositivos"]
         self.bt_items = ["Bluejacking", "Bluesnarfing", "BLE Spoofing", "Scan Devices"]
-        self.ferramentas_items = ["Phishing", "MITM", "DoS", "USB", "Hydra", "Network scan"]
+        self.ferramentas_items = ["Phishing", "MITM", "DoS", "USB", "Hydra", "Nmap", "Ghobuster", "Browser", "SQLi Lab", "Network scan"]
         self.bt_devices = []
         self.bt_device_selected = 0
         self.bt_action_items = ["Connect", "Pair", "Disconnect", "Info"]
@@ -65,6 +67,8 @@ class AuditArcadeUI:
         self.bt_selected = 0
         self.ferramentas_selected = 0
         self.wifi_permission_message = ""
+        self.browser_pages = {}
+        self.browser_mode = "browse"
         self.last_status = "Pronto"
         self.last_output = "Selecione um módulo para iniciar uma análise autorizada."
         self.last_command = ""
@@ -76,11 +80,6 @@ class AuditArcadeUI:
         # ASCII-art icons based on provided image bases (pixel-like blocks)
         self.icons = {
             "Wi-Fi": (
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%%%%@%%%%%%%%%%%%%@%%%%%@%%@%@%%%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@....*..........:::=....:..::::..-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
@@ -108,9 +107,6 @@ class AuditArcadeUI:
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
             ),
             "Bluetooth": (
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=:::=.:.@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@.:.=...=..:@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
@@ -156,9 +152,6 @@ class AuditArcadeUI:
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:..=...=...%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...=::.=...@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%@%@%@@@@@%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
             ),
             "Ferramentas": (
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
@@ -187,7 +180,7 @@ class AuditArcadeUI:
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%:..-...-...:...-...........-:..:...::..-:::...:.@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@...-...-...::..:...........:....::.:...-......::@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#...:...-...-...:...:......:....:...........-......:....:@@@@@@@@@@@@@@@@@@@@@@\n"
-                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%...:...-...-...-.......:...........-.......:...-............@@@@@@@@@@@@@@@@@@@@@@\n"
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%...:...-...-...-.......:...........-.......:...-........@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%::.:...-::.-:..:..::.:::%@@@@@@@:::.::.::::-....:::...:.@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#...:...-...-...:........@@@@@@@@...........-............@@@@@@@@@@@@@@@@@@@@@@\n"
                 "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@%.......-...-........*@@@@@@@@@@@@@@:.......-..........:.@@@@@@@@@@@@@@@@@@@@@@\n"
@@ -955,17 +948,22 @@ class AuditArcadeUI:
         return any(token in text for token in ["permission denied", "permission", "location permission", "location services", "needs location", "requires location", "access denied", "denied", "não tem permissão", "permissão de localização"])
 
     def request_wifi_scan_permission(self) -> str:
-        """Help the user grant location permission for Wi-Fi scanning in Android/Termux."""
+        """Attempt to enable Wi-Fi scan-related permissions automatically on Android/Termux when possible."""
         if os.name == "nt":
             return "No Windows a permissão é tratada pelo sistema. Se o scan não carregar, verifique o adaptador Wi-Fi e o driver do dispositivo."
 
         try:
+            if shutil.which("pm"):
+                proc = subprocess.run(["pm", "grant", "com.termux", "android.permission.ACCESS_FINE_LOCATION"], capture_output=True, text=True, timeout=20)
+                if proc.returncode == 0:
+                    return "Permissão de localização concedida ao Termux. Tente escanear novamente."
+
             if shutil.which("am"):
                 cmd = ["am", "start", "-a", "android.settings.APPLICATION_DETAILS_SETTINGS", "-d", "package:com.termux"]
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
                 output = (proc.stdout + proc.stderr).strip()
                 if proc.returncode == 0:
-                    return "A tela de permissões do Termux foi aberta. Ative a permissão de localização e depois tente escanear novamente."
+                    return "A tela de permissões do Termux foi aberta. Se necessário, confirme a localização e tente novamente."
                 if output:
                     return f"Tente abrir as permissões do Termux manualmente. Detalhes: {output}"
         except Exception as exc:
@@ -1477,6 +1475,13 @@ class AuditArcadeUI:
             )
         self.screen = "report"
 
+    def render_ascii_label(self, text: str) -> str:
+        """Render a tool name as block ASCII art for a more visual interface."""
+        try:
+            return self.font.renderText(text.upper())
+        except Exception:
+            return text.upper()
+
     def run_ferramentas_tool(self, name: str) -> None:
         self.last_command = f"Ferramentas tool: {name}"
         if name == "Phishing":
@@ -1495,6 +1500,18 @@ class AuditArcadeUI:
         elif name == "Hydra":
             self.run_hydra_tool()
             return
+        elif name == "Nmap":
+            self.run_nmap_tool()
+            return
+        elif name == "Ghobuster":
+            self.run_gobuster_tool()
+            return
+        elif name == "Browser":
+            self.run_browser_tool()
+            return
+        elif name == "SQLi Lab":
+            self.run_sqli_lab_tool()
+            return
         elif name == "Network scan":
             self.run_network_devices_scan()
             return
@@ -1506,6 +1523,125 @@ class AuditArcadeUI:
         self.run_bash(
             "(command -v hydra >/dev/null 2>&1 && hydra -L /dev/null -P /dev/null -t 1 -f 127.0.0.1 ssh 2>&1) || echo 'Hydra não está disponível ou falha na execução.'"
         )
+        self.screen = "report"
+
+    def run_nmap_tool(self) -> None:
+        self.last_command = "Nmap scan"
+        self.message = "Executando varredura de rede segura"
+        try:
+            target = input("Alvo para o Nmap (ex.: 192.168.0.1 ou exemplo.com): ").strip()
+            if not target:
+                self.last_status = "INFO"
+                self.last_output = "Nenhum alvo informado."
+                self.screen = "report"
+                return
+            if shutil.which("nmap"):
+                proc = subprocess.run(["nmap", "-sn", target], capture_output=True, text=True, timeout=30)
+                output = (proc.stdout + proc.stderr).strip() or "Sem saída do Nmap."
+            else:
+                output = "Nmap não está instalado neste ambiente."
+            self.last_output = output
+            self.last_status = "OK" if "Nmap" in output or "nmap" in output.lower() else "INFO"
+        except Exception as exc:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha ao executar o Nmap: {exc}"
+        self.screen = "report"
+
+    def run_gobuster_tool(self) -> None:
+        self.last_command = "Ghobuster-like probe"
+        self.message = "Verificando caminhos comuns em um alvo autorizado"
+        try:
+            target = input("URL base para sondagem (ex.: https://example.com): ").strip()
+            if not target:
+                self.last_status = "INFO"
+                self.last_output = "Nenhuma URL informada."
+                self.screen = "report"
+                return
+            if not target.startswith(("http://", "https://")):
+                target = "https://" + target
+            paths = ["/", "/admin", "/login", "/robots.txt", "/api", "/health", "/wp-admin", "/index.php"]
+            results = []
+            for path in paths:
+                url = target.rstrip("/") + path
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=10) as response:
+                        code = getattr(response, "status", "?")
+                        results.append(f"{code} {url}")
+                except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+                    continue
+            self.last_output = "\n".join(results) if results else "Nenhum caminho respondendo foi encontrado."
+            self.last_status = "OK" if results else "INFO"
+        except Exception as exc:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha na sondagem: {exc}"
+        self.screen = "report"
+
+    def run_browser_tool(self) -> None:
+        self.last_command = "Browser interno"
+        self.message = "Abrindo o navegador interno"
+        self.browser_mode = "browse"
+        try:
+            target = input("Digite um código de 6 caracteres ou uma URL: ").strip()
+            if not target:
+                self.last_status = "INFO"
+                self.last_output = "Nenhum código ou URL informado."
+                self.screen = "report"
+                return
+            if len(target) == 6 and re.fullmatch(r"[A-Za-z0-9]+", target):
+                page = self.browser_pages.get(target.lower())
+                if page:
+                    self.last_output = f"SITE: {target.lower()}\n\n{page}"
+                    self.last_status = "OK"
+                else:
+                    self.last_output = f"Nenhuma página encontrada para o código {target.lower()}."
+                    self.last_status = "INFO"
+            else:
+                if not target.startswith(("http://", "https://")):
+                    target = "https://" + target
+                req = urllib.request.Request(target, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    body = response.read().decode("utf-8", errors="ignore")
+                text = re.sub(r"<script.*?</script>", " ", body, flags=re.S | re.I)
+                text = re.sub(r"<style.*?</style>", " ", text, flags=re.S | re.I)
+                text = re.sub(r"<[^>]+>", " ", text)
+                text = re.sub(r"\s+", " ", text).strip()
+                self.last_output = f"URL: {target}\n\n{text[:3000]}"
+                self.last_status = "OK"
+        except Exception as exc:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha ao abrir a página: {exc}"
+        self.screen = "report"
+
+    def publish_browser_page(self) -> None:
+        self.last_command = "Publicar página"
+        self.message = "Criando uma nova página pública"
+        try:
+            code = input("Código de 6 caracteres: ").strip().lower()
+            if not re.fullmatch(r"[A-Za-z0-9]{6}", code):
+                self.last_status = "ERRO"
+                self.last_output = "O código precisa ter exatamente 6 caracteres alfanuméricos."
+                self.screen = "report"
+                return
+            content = input("Conteúdo da página: ").strip()
+            if not content:
+                self.last_status = "ERRO"
+                self.last_output = "Nenhum conteúdo informado."
+                self.screen = "report"
+                return
+            self.browser_pages[code] = content
+            self.last_output = f"Página publicada com sucesso. Acesse com o código: {code}"
+            self.last_status = "OK"
+        except Exception as exc:
+            self.last_status = "ERRO"
+            self.last_output = f"Falha ao publicar a página: {exc}"
+        self.screen = "report"
+
+    def run_sqli_lab_tool(self) -> None:
+        self.last_command = "SQLi Lab"
+        self.message = "Ferramenta educativa de segurança"
+        self.last_output = "Ferramenta de SQLi desativada em modo seguro. Use apenas em ambientes autorizados e endpoints de teste locais."
+        self.last_status = "INFO"
         self.screen = "report"
 
     def run_network_devices_scan(self) -> None:
@@ -1574,13 +1710,14 @@ class AuditArcadeUI:
 
     def draw_wifi_menu(self) -> None:
         selected = self.wifi_items[self.wifi_selected]
-        title = Text(self.font.renderText(selected), style="bold white")
+        title = Text(self.render_ascii_label(selected), style="bold white")
         self.console.print(Panel(title, border_style="white", box=box.SQUARE))
         table = Table(title="Wi‑Fi Ferramentas", box=box.SIMPLE, show_header=False)
         table.add_column("Opção", style="bold white")
         for idx, item in enumerate(self.wifi_items):
             style = "bold black on white" if idx == self.wifi_selected else "white"
-            table.add_row(f"> {item}" if idx == self.wifi_selected else f"  {item}", style=style)
+            label = self.render_ascii_label(item)
+            table.add_row(f"> {label}" if idx == self.wifi_selected else f"  {label}", style=style)
         self.console.print(table)
         self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar\n[white]Códigos[/white] abre menu visual de redes", border_style="white"))
 
@@ -1614,13 +1751,14 @@ class AuditArcadeUI:
 
     def draw_bluetooth_menu(self) -> None:
         selected = self.bt_items[self.bt_selected]
-        title = Text(self.font.renderText(selected), style="bold white")
+        title = Text(self.render_ascii_label(selected), style="bold white")
         self.console.print(Panel(title, border_style="white", box=box.SQUARE))
         table = Table(title="Bluetooth Ferramentas", box=box.SIMPLE, show_header=False)
         table.add_column("Opção", style="bold white")
         for idx, item in enumerate(self.bt_items):
             style = "bold black on white" if idx == self.bt_selected else "white"
-            table.add_row(f"> {item}" if idx == self.bt_selected else f"  {item}", style=style)
+            label = self.render_ascii_label(item)
+            table.add_row(f"> {label}" if idx == self.bt_selected else f"  {label}", style=style)
         self.console.print(table)
         self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar", border_style="white"))
 
@@ -1638,13 +1776,14 @@ class AuditArcadeUI:
 
     def draw_ferramentas_menu(self) -> None:
         selected = self.ferramentas_items[self.ferramentas_selected]
-        title = Text(self.font.renderText(selected), style="bold white")
+        title = Text(self.render_ascii_label(selected), style="bold white")
         self.console.print(Panel(title, border_style="white", box=box.SQUARE))
         table = Table(title="Ferramentas", box=box.SIMPLE, show_header=False)
         table.add_column("Opção", style="bold white")
         for idx, item in enumerate(self.ferramentas_items):
             style = "bold black on white" if idx == self.ferramentas_selected else "white"
-            table.add_row(f"> {item}" if idx == self.ferramentas_selected else f"  {item}", style=style)
+            label = self.render_ascii_label(item)
+            table.add_row(f"> {label}" if idx == self.ferramentas_selected else f"  {label}", style=style)
         self.console.print(table)
         self.console.print(Panel("[white]Setas / A/D / W/S[/white] para navegar\n[white]Enter[/white] executar\n[white]B[/white] voltar", border_style="white"))
 
